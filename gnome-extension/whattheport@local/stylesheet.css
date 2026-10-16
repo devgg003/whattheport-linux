@@ -1,0 +1,69 @@
+.wtp-indicator-box {
+    spacing: 6px;
+    padding: 0 6px;
+}
+
+.wtp-dotgrid {
+    font-size: 15px;
+    font-weight: bold;
+    color: #F5F5F7;
+}
+
+.wtp-dotgrid-amber {
+    font-size: 15px;
+    font-weight: bold;
+    color: #FFB224;
+}
+
+.wtp-count-label {
+    font-size: 11px;
+    font-weight: bold;
+    color: #F5F5F7;
+}
+
+.wtp-popup-content {
+    padding: 8px 12px;
+    min-width: 290px;
+}
+
+.wtp-popup-title {
+    font-size: 11px;
+    font-weight: bold;
+    color: rgba(255, 255, 255, 0.45);
+    margin-bottom: 2px;
+}
+
+.wtp-popup-mem {
+    font-size: 22px;
+    font-weight: 600;
+    font-family: monospace;
+    color: #F5F5F7;
+}
+
+.wtp-popup-servers {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.5);
+    margin-bottom: 8px;
+}
+
+.wtp-row-port {
+    font-weight: bold;
+    font-family: monospace;
+    color: #6EC7ED;
+}
+
+.wtp-row-name {
+    font-weight: 500;
+    color: #F5F5F7;
+}
+
+.wtp-row-sub {
+    font-size: 10px;
+    color: rgba(255, 255, 255, 0.45);
+}
+
+.wtp-row-mem {
+    font-family: monospace;
+    font-size: 11px;
+    color: #F5F5F7;
+}

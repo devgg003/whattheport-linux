@@ -1,0 +1,231 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 620" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#12131A"/>
+      <stop offset="50%" stop-color="#181924"/>
+      <stop offset="100%" stop-color="#101118"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="125%" height="125%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#000000" flood-opacity="0.55"/>
+    </filter>
+  </defs>
+
+  <!-- Canvas Background -->
+  <rect width="1120" height="620" rx="16" fill="url(#bgGrad)"/>
+
+  <!-- GNOME Top Bar Mock -->
+  <rect x="24" y="18" width="1072" height="32" rx="8" fill="#0D0D11" stroke="rgba(255,255,255,0.08)"/>
+  <circle cx="44" cy="34" r="5" fill="#F5F5F7" opacity="0.8"/>
+  <rect x="56" y="31" width="24" height="6" rx="3" fill="#F5F5F7" opacity="0.35"/>
+  <text x="560" y="38" fill="#F5F5F7" font-family="system-ui, -apple-system, sans-serif" font-size="12" font-weight="600" text-anchor="middle">Oct 16  13:15</text>
+
+  <!-- Top Bar Right Tray Area -->
+  <g transform="translate(920, 22)">
+    <rect x="0" y="0" width="96" height="24" rx="12" fill="#2A2B36" stroke="#6EC7ED" stroke-width="1"/>
+    <text x="16" y="16" fill="#6EC7ED" font-family="monospace" font-size="13" font-weight="700">⠿</text>
+    <text x="34" y="16" fill="#F5F5F7" font-family="system-ui, sans-serif" font-size="11" font-weight="600">4 servers</text>
+    <circle cx="118" cy="12" r="5" fill="#F5F5F7" opacity="0.5"/>
+    <circle cx="136" cy="12" r="5" fill="#F5F5F7" opacity="0.5"/>
+    <circle cx="154" cy="12" r="5" fill="#F5F5F7" opacity="0.5"/>
+  </g>
+
+  <!-- ==================== PANEL 1: MAIN POPOVER ==================== -->
+  <g transform="translate(50, 74)" filter="url(#shadow)">
+    <rect width="380" height="506" rx="14" fill="#202024" stroke="rgba(255,255,255,0.14)" stroke-width="1"/>
+
+    <!-- Header -->
+    <text x="190" y="28" fill="#EBEBF5" fill-opacity="0.5" font-family="system-ui, sans-serif" font-size="11" font-weight="600" text-anchor="middle">Servers</text>
+
+    <!-- Total Memory & CPU -->
+    <text x="20" y="64" fill="#F5F5F7" font-family="ui-monospace, monospace" font-size="28" font-weight="700">3.4</text>
+    <text x="72" y="64" fill="#EBEBF5" fill-opacity="0.6" font-family="system-ui, sans-serif" font-size="13" font-weight="600">GB</text>
+    <text x="360" y="64" fill="#EBEBF5" fill-opacity="0.5" font-family="system-ui, sans-serif" font-size="11" text-anchor="end">CPU (servers) 8.4%</text>
+
+    <!-- Segmented Memory Bar -->
+    <g transform="translate(20, 78)">
+      <rect width="340" height="10" rx="5" fill="#FFFFFF" fill-opacity="0.08"/>
+      <rect x="0" y="0" width="42" height="10" rx="4" fill="#6EC7ED"/>
+      <rect x="42" y="0" width="28" height="10" fill="#B599F0"/>
+      <rect x="70" y="0" width="54" height="10" fill="#EB9CD4"/>
+      <rect x="124" y="0" width="18" height="10" fill="#7D9CF2"/>
+      <rect x="142" y="0" width="110" height="10" fill="#FFFFFF" fill-opacity="0.25"/>
+    </g>
+
+    <!-- Legend -->
+    <text x="20" y="106" fill="#EBEBF5" fill-opacity="0.5" font-family="system-ui, sans-serif" font-size="11">■ Servers 3.4 GB  ― Other 7.1 GB  ― Free 5.5 of 16.0 GB</text>
+
+    <!-- Row 1: :3000 -->
+    <g transform="translate(12, 124)">
+      <rect width="356" height="54" rx="8" fill="#FFFFFF" fill-opacity="0.06"/>
+      <text x="12" y="24" fill="#6EC7ED" font-family="ui-monospace, monospace" font-size="13" font-weight="700">: 3000</text>
+      <text x="74" y="22" fill="#F5F5F7" font-family="system-ui, sans-serif" font-size="13" font-weight="600">web-dashboard</text>
+      <text x="74" y="40" fill="#EBEBF5" fill-opacity="0.6" font-family="system-ui, sans-serif" font-size="11">✴ Fix OAuth callback · feat/auth · up 42m</text>
+      <!-- Sparkline -->
+      <polyline points="228,30 236,29 244,28 252,25 260,26 268,23" fill="none" stroke="#6EC7ED" stroke-width="1.5"/>
+      <text x="322" y="31" fill="#F5F5F7" font-family="ui-monospace, monospace" font-size="12" text-anchor="end">640 MB</text>
+      <rect x="330" y="17" width="18" height="18" rx="4" fill="#FFFFFF" fill-opacity="0.1"/>
+      <rect x="335" y="22" width="8" height="8" rx="1" fill="#F5F5F7"/>
+    </g>
+
+    <!-- Row 2: :4321 -->
+    <g transform="translate(12, 184)">
+      <rect width="356" height="54" rx="8" fill="transparent"/>
+      <text x="12" y="24" fill="#B599F0" font-family="ui-monospace, monospace" font-size="13" font-weight="700">: 4321</text>
+      <text x="74" y="22" fill="#F5F5F7" font-family="system-ui, sans-serif" font-size="13" font-weight="600">docs-astro</text>
+      <text x="74" y="40" fill="#EBEBF5" fill-opacity="0.6" font-family="system-ui, sans-serif" font-size="11">main · up 2h 15m</text>
+      <polyline points="228,28 236,28 244,27 252,28 260,27 268,27" fill="none" stroke="#B599F0" stroke-width="1.5"/>
+      <text x="322" y="31" fill="#F5F5F7" font-family="ui-monospace, monospace" font-size="12" text-anchor="end">312 MB</text>
+      <rect x="330" y="17" width="18" height="18" rx="4" fill="#FFFFFF" fill-opacity="0.08"/>
+      <rect x="335" y="22" width="8" height="8" rx="1" fill="#F5F5F7"/>
+    </g>
+
+    <!-- Row 3: :5173 (Leaking / Amber Warning) -->
+    <g transform="translate(12, 244)">
+      <rect width="356" height="54" rx="8" fill="rgba(255, 178, 36, 0.06)"/>
+      <text x="12" y="24" fill="#EB9CD4" font-family="ui-monospace, monospace" font-size="13" font-weight="700">: 5173</text>
+      <text x="74" y="22" fill="#F5F5F7" font-family="system-ui, sans-serif" font-size="13" font-weight="600">studio-vite</text>
+      <text x="74" y="40" fill="#FFB224" font-family="system-ui, sans-serif" font-size="11" font-weight="600">+620 MB in 10 min</text>
+      <polyline points="228,35 236,32 244,28 252,24 260,19 268,15" fill="none" stroke="#FFB224" stroke-width="1.6"/>
+      <text x="322" y="31" fill="#FFB224" font-family="ui-monospace, monospace" font-size="12" font-weight="700" text-anchor="end">2.18 GB</text>
+      <rect x="330" y="17" width="18" height="18" rx="4" fill="#FFFFFF" fill-opacity="0.08"/>
+      <rect x="335" y="22" width="8" height="8" rx="1" fill="#F5F5F7"/>
+    </g>
+
+    <!-- Row 4: :8000 -->
+    <g transform="translate(12, 304)">
+      <rect width="356" height="54" rx="8" fill="transparent"/>
+      <text x="12" y="24" fill="#7D9CF2" font-family="ui-monospace, monospace" font-size="13" font-weight="700">: 8000</text>
+      <text x="74" y="22" fill="#F5F5F7" font-family="system-ui, sans-serif" font-size="13" font-weight="600">billing-api</text>
+      <text x="74" y="40" fill="#EBEBF5" fill-opacity="0.6" font-family="system-ui, sans-serif" font-size="11">Worktree deleted · up 5h</text>
+      <polyline points="228,28 236,28 244,28 252,28 260,28 268,28" fill="none" stroke="#7D9CF2" stroke-width="1.5"/>
+      <text x="322" y="31" fill="#F5F5F7" font-family="ui-monospace, monospace" font-size="12" text-anchor="end">268 MB</text>
+      <rect x="330" y="17" width="18" height="18" rx="4" fill="#FFFFFF" fill-opacity="0.08"/>
+      <rect x="335" y="22" width="8" height="8" rx="1" fill="#F5F5F7"/>
+    </g>
+
+    <!-- Footer -->
+    <line x1="0" y1="454" x2="380" y2="454" stroke="rgba(255,255,255,0.08)"/>
+    <rect x="14" y="466" width="86" height="28" rx="6" fill="#FFFFFF" fill-opacity="0.08"/>
+    <text x="57" y="484" fill="#F5F5F7" font-family="system-ui, sans-serif" font-size="12" font-weight="500" text-anchor="middle">Clean up 1</text>
+
+    <rect x="338" y="466" width="28" height="28" rx="6" fill="#FFFFFF" fill-opacity="0.08"/>
+    <text x="352" y="485" fill="#F5F5F7" font-family="system-ui, sans-serif" font-size="14" text-anchor="middle">⚙</text>
+  </g>
+
+  <!-- ==================== PANEL 2: SERVER DETAIL VIEW ==================== -->
+  <g transform="translate(465, 74)" filter="url(#shadow)">
+    <rect width="380" height="506" rx="14" fill="#202024" stroke="rgba(255,255,255,0.14)" stroke-width="1"/>
+
+    <!-- Header -->
+    <rect x="14" y="14" width="26" height="26" rx="6" fill="#FFFFFF" fill-opacity="0.08"/>
+    <text x="27" y="31" fill="#F5F5F7" font-family="system-ui, sans-serif" font-size="14" text-anchor="middle">‹</text>
+    <text x="50" y="32" fill="#6EC7ED" font-family="ui-monospace, monospace" font-size="15" font-weight="700">: 3000</text>
+    <text x="108" y="32" fill="#F5F5F7" font-family="system-ui, sans-serif" font-size="14" font-weight="600">web-dashboard</text>
+
+    <rect x="304" y="14" width="26" height="26" rx="6" fill="#FFFFFF" fill-opacity="0.08"/>
+    <text x="317" y="31" fill="#F5F5F7" font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">↻</text>
+    <rect x="336" y="14" width="26" height="26" rx="6" fill="#FFFFFF" fill-opacity="0.08"/>
+    <rect x="345" y="23" width="8" height="8" rx="1" fill="#F5F5F7"/>
+
+    <!-- Metadata Grid -->
+    <g transform="translate(16, 58)">
+      <text x="0" y="14" fill="#EBEBF5" fill-opacity="0.5" font-family="system-ui, sans-serif" font-size="11">Session</text>
+      <text x="68" y="14" fill="#EBEBF5" fill-opacity="0.8" font-family="system-ui, sans-serif" font-size="11">✴ Fix OAuth callback</text>
+
+      <text x="0" y="34" fill="#EBEBF5" fill-opacity="0.5" font-family="system-ui, sans-serif" font-size="11">Branch</text>
+      <text x="68" y="34" fill="#EBEBF5" fill-opacity="0.8" font-family="system-ui, sans-serif" font-size="11">feat/auth</text>
+
+      <text x="0" y="54" fill="#EBEBF5" fill-opacity="0.5" font-family="system-ui, sans-serif" font-size="11">Uptime</text>
+      <text x="68" y="54" fill="#EBEBF5" fill-opacity="0.8" font-family="system-ui, sans-serif" font-size="11">42m</text>
+
+      <text x="0" y="74" fill="#EBEBF5" fill-opacity="0.5" font-family="system-ui, sans-serif" font-size="11">Command</text>
+      <text x="68" y="74" fill="#EBEBF5" fill-opacity="0.55" font-family="ui-monospace, monospace" font-size="11">next dev --turbopack -p 3000</text>
+    </g>
+
+    <!-- Memory 10-min Chart -->
+    <g transform="translate(16, 154)">
+      <text x="0" y="12" fill="#EBEBF5" fill-opacity="0.7" font-family="system-ui, sans-serif" font-size="11">Memory  640 MB</text>
+      <text x="348" y="12" fill="#EBEBF5" fill-opacity="0.45" font-family="system-ui, sans-serif" font-size="11" text-anchor="end">10 min</text>
+
+      <rect x="0" y="20" width="348" height="60" rx="6" fill="#FFFFFF" fill-opacity="0.03"/>
+      <line x1="0" y1="32" x2="348" y2="32" stroke="#FFB224" stroke-opacity="0.35" stroke-dasharray="4,3"/>
+      <polyline points="6,64 40,62 80,60 120,58 160,52 200,53 240,49 280,47 320,45 342,44" fill="none" stroke="#6EC7ED" stroke-width="2"/>
+      <circle cx="342" cy="44" r="3" fill="#6EC7ED"/>
+    </g>
+
+    <!-- CPU 10-min Histogram -->
+    <g transform="translate(16, 250)">
+      <text x="0" y="12" fill="#EBEBF5" fill-opacity="0.7" font-family="system-ui, sans-serif" font-size="11">CPU  6.2%</text>
+      <rect x="0" y="20" width="348" height="56" rx="6" fill="#FFFFFF" fill-opacity="0.03"/>
+      <!-- Histogram bars -->
+      <g fill="#6EC7ED" fill-opacity="0.8">
+        <rect x="10" y="62" width="8" height="14" rx="1"/>
+        <rect x="26" y="54" width="8" height="22" rx="1"/>
+        <rect x="42" y="66" width="8" height="10" rx="1"/>
+        <rect x="58" y="68" width="8" height="8" rx="1"/>
+        <rect x="74" y="42" width="8" height="34" rx="1"/>
+        <rect x="90" y="58" width="8" height="18" rx="1"/>
+        <rect x="106" y="64" width="8" height="12" rx="1"/>
+        <rect x="122" y="66" width="8" height="10" rx="1"/>
+        <rect x="138" y="50" width="8" height="26" rx="1"/>
+        <rect x="154" y="60" width="8" height="16" rx="1"/>
+        <rect x="170" y="65" width="8" height="11" rx="1"/>
+        <rect x="186" y="62" width="8" height="14" rx="1"/>
+        <rect x="202" y="38" width="8" height="38" rx="1"/>
+        <rect x="218" y="52" width="8" height="24" rx="1"/>
+        <rect x="234" y="64" width="8" height="12" rx="1"/>
+        <rect x="250" y="66" width="8" height="10" rx="1"/>
+        <rect x="266" y="59" width="8" height="17" rx="1"/>
+        <rect x="282" y="63" width="8" height="13" rx="1"/>
+        <rect x="298" y="55" width="8" height="21" rx="1"/>
+        <rect x="314" y="61" width="8" height="15" rx="1"/>
+        <rect x="330" y="58" width="8" height="18" rx="1"/>
+      </g>
+    </g>
+
+    <!-- Process Tree -->
+    <g transform="translate(16, 344)">
+      <text x="0" y="12" fill="#EBEBF5" fill-opacity="0.5" font-family="system-ui, sans-serif" font-size="11">Processes (3)</text>
+      <text x="348" y="12" fill="#EBEBF5" fill-opacity="0.5" font-family="ui-monospace, monospace" font-size="11" text-anchor="end">640 MB</text>
+
+      <text x="0" y="34" fill="#EBEBF5" fill-opacity="0.75" font-family="system-ui, sans-serif" font-size="11">pnpm dev</text>
+      <text x="348" y="34" fill="#EBEBF5" fill-opacity="0.5" font-family="ui-monospace, monospace" font-size="11" text-anchor="end">42 MB · 0%</text>
+
+      <text x="0" y="54" fill="#EBEBF5" fill-opacity="0.75" font-family="system-ui, sans-serif" font-size="11">  next dev --turbopack</text>
+      <text x="348" y="54" fill="#EBEBF5" fill-opacity="0.5" font-family="ui-monospace, monospace" font-size="11" text-anchor="end">118 MB · 0.4%</text>
+
+      <text x="0" y="74" fill="#EBEBF5" fill-opacity="0.75" font-family="system-ui, sans-serif" font-size="11">    next-server (v15.2.0)</text>
+      <text x="348" y="74" fill="#EBEBF5" fill-opacity="0.5" font-family="ui-monospace, monospace" font-size="11" text-anchor="end">480 MB · 5.8%</text>
+    </g>
+
+    <!-- Action Footer Buttons -->
+    <g transform="translate(16, 452)">
+      <rect x="0" y="0" width="186" height="34" rx="6" fill="#F5F5F7"/>
+      <text x="93" y="21" fill="#1E1E21" font-family="system-ui, sans-serif" font-size="12" font-weight="700" text-anchor="middle">Open localhost:3000</text>
+
+      <rect x="194" y="0" width="80" height="34" rx="6" fill="#FFFFFF" fill-opacity="0.08"/>
+      <text x="234" y="21" fill="#F5F5F7" font-family="system-ui, sans-serif" font-size="12" font-weight="500" text-anchor="middle">▲ Preview</text>
+
+      <rect x="282" y="0" width="66" height="34" rx="6" fill="#FFFFFF" fill-opacity="0.08"/>
+      <text x="315" y="21" fill="#F5F5F7" font-family="system-ui, sans-serif" font-size="12" font-weight="500" text-anchor="middle">PR #142</text>
+    </g>
+  </g>
+
+  <!-- ==================== PANEL 3: TOP-BAR TRAY DROPDOWN ==================== -->
+  <g transform="translate(870, 62)" filter="url(#shadow)">
+    <rect width="224" height="236" rx="12" fill="#25252B" stroke="rgba(255,255,255,0.16)" stroke-width="1"/>
+    <text x="16" y="28" fill="#EBEBF5" fill-opacity="0.5" font-family="system-ui, sans-serif" font-size="11" font-weight="600">Servers: 3.4 GB (4 active)</text>
+    <line x1="10" y1="40" x2="214" y2="40" stroke="rgba(255,255,255,0.08)"/>
+
+    <rect x="8" y="48" width="208" height="30" rx="6" fill="#FFFFFF" fill-opacity="0.08"/>
+    <text x="16" y="67" fill="#F5F5F7" font-family="system-ui, sans-serif" font-size="11">:3000  web-dashboard ― 640 MB</text>
+
+    <text x="16" y="99" fill="#F5F5F7" font-family="system-ui, sans-serif" font-size="11">:4321  docs-astro ― 312 MB</text>
+    <text x="16" y="129" fill="#F5F5F7" font-family="system-ui, sans-serif" font-size="11">:5173  studio-vite ― 2.18 GB</text>
+    <text x="16" y="159" fill="#F5F5F7" font-family="system-ui, sans-serif" font-size="11">:8000  billing-api ― 268 MB</text>
+
+    <line x1="10" y1="178" x2="214" y2="178" stroke="rgba(255,255,255,0.08)"/>
+    <rect x="8" y="188" width="208" height="32" rx="6" fill="#6EC7ED" fill-opacity="0.16"/>
+    <text x="16" y="208" fill="#6EC7ED" font-family="system-ui, sans-serif" font-size="11" font-weight="600">Open Full Dashboard…</text>
+  </g>
+</svg>

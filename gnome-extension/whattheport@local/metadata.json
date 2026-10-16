@@ -1,0 +1,14 @@
+{
+  "name": "WhatThePort",
+  "description": "Dev servers in your top bar — ports, memory, git branches, and cleanup",
+  "uuid": "whattheport@local",
+  "shell-version": [
+    "45",
+    "46",
+    "47",
+    "48",
+    "49",
+    "50"
+  ],
+  "url": "https://whattheport.dev"
+}

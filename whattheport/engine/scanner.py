@@ -1,8 +1,9 @@
-"""Socket scanner that inspects listening TCP sockets on Linux."""
+"""Socket scanner that inspects listening TCP sockets on Linux, including root docker-proxy sockets."""
+import os
 import re
 import subprocess
 from dataclasses import dataclass, field
-from typing import Dict, List, Set, Optional
+from typing import Dict, List, Set, Optional, Tuple
 
 @dataclass
 class ListeningSocket:
@@ -18,20 +19,19 @@ class SocketScan:
     listener_pids_by_port: Dict[int, Set[int]] = field(default_factory=dict)
 
 class SocketScanner:
-    """Scans listening TCP sockets using /proc/net/tcp, /proc/net/tcp6 and ss."""
+    """Scans listening TCP sockets using ss and /proc cmdline fallback for root docker-proxy processes."""
 
     @staticmethod
     def scan() -> SocketScan:
-        # We try 'ss -ltnpH' first as it's standard and fast
         sockets_by_port: Dict[int, Dict[int, ListeningSocket]] = {}
         inbound_conns: Dict[int, int] = {}
         listener_pids: Dict[int, Set[int]] = {}
 
+        docker_proxies = SocketScanner._find_docker_proxy_ports()
+
         ss_output = SocketScanner._run_ss()
         if ss_output:
-            SocketScanner._parse_ss_output(ss_output, sockets_by_port, listener_pids)
-        else:
-            SocketScanner._scan_proc(sockets_by_port, listener_pids)
+            SocketScanner._parse_ss_output(ss_output, sockets_by_port, listener_pids, docker_proxies)
 
         # Count active inbound connections to listening ports
         inbound_conns = SocketScanner._count_inbound_connections(set(sockets_by_port.keys()))
@@ -47,6 +47,33 @@ class SocketScanner:
             inbound_connections=inbound_conns,
             listener_pids_by_port=listener_pids
         )
+
+    @staticmethod
+    def _find_docker_proxy_ports() -> Dict[int, List[Tuple[str, int]]]:
+        """Map host_port -> [('docker-proxy', pid)] by reading world-readable /proc/<pid>/cmdline."""
+        port_map: Dict[int, List[Tuple[str, int]]] = {}
+        try:
+            for entry in os.scandir("/proc"):
+                if not entry.name.isdigit():
+                    continue
+                pid = int(entry.name)
+                try:
+                    with open(f"/proc/{pid}/cmdline", "rb") as f:
+                        raw = f.read()
+                    if b"docker-proxy" not in raw:
+                        continue
+                    args = [a.decode("utf-8", errors="replace") for a in raw.split(b"\x00") if a]
+                    if not args or "docker-proxy" not in os.path.basename(args[0]):
+                        continue
+                    for i, arg in enumerate(args):
+                        if arg == "-host-port" and i + 1 < len(args):
+                            port = int(args[i + 1])
+                            port_map.setdefault(port, []).append(("docker-proxy", pid))
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return port_map
 
     @staticmethod
     def _run_ss() -> Optional[str]:
@@ -66,8 +93,12 @@ class SocketScanner:
         return None
 
     @staticmethod
-    def _parse_ss_output(output: str, sockets_by_port: Dict[int, Dict[int, ListeningSocket]], listener_pids: Dict[int, Set[int]]):
-        # Format usually: LISTEN 0 128 127.0.0.1:3000 0.0.0.0:* users:(("node",pid=12345,fd=19))
+    def _parse_ss_output(
+        output: str,
+        sockets_by_port: Dict[int, Dict[int, ListeningSocket]],
+        listener_pids: Dict[int, Set[int]],
+        docker_proxies: Dict[int, List[Tuple[str, int]]]
+    ):
         for line in output.strip().splitlines():
             line = line.strip()
             if not line:
@@ -82,9 +113,12 @@ class SocketScanner:
                 continue
 
             users_part = " ".join(parts[4:])
-            # Extract users:(("...",pid=...,fd=...))
-            # match pairs like ("process",pid=1234)
             pids = SocketScanner._extract_pids_from_users(users_part)
+
+            # Fallback to docker-proxy PID if ss hid users:(...) for root-owned docker-proxy
+            if not pids and port in docker_proxies:
+                pids = docker_proxies[port]
+
             if not pids:
                 continue
 
@@ -108,7 +142,6 @@ class SocketScanner:
 
     @staticmethod
     def _extract_port(addr_str: str) -> Optional[int]:
-        # Handle [::]:3000, 127.0.0.1:3000, *:3000
         idx = addr_str.rfind(":")
         if idx != -1:
             try:
@@ -128,13 +161,21 @@ class SocketScanner:
         return addr_str
 
     @staticmethod
-    def _extract_pids_from_users(users_str: str) -> List[tuple]:
-        # Pattern: ("node",pid=12345,...) or ("python3.12",pid=999,...)
+    def _extract_pids_from_users(users_str: str) -> List[Tuple[str, int]]:
         results = []
         matches = re.findall(r'\("([^"]+)",pid=(\d+)', users_str)
+        names = {m[0] for m in matches}
+        # Ignore internal IDE sockets that leak fds to child subprocesses
+        if names & {"antigravity", "language_server", "cursor", "code", "claude-desktop"}:
+            return []
+        my_pid = os.getpid()
         for name, pid_s in matches:
+            if name == "ss":
+                continue
             try:
-                results.append((name, int(pid_s)))
+                pid = int(pid_s)
+                if pid != my_pid:
+                    results.append((name, pid))
             except ValueError:
                 pass
         return results
@@ -145,7 +186,6 @@ class SocketScanner:
         if not ports:
             return counts
         try:
-            # -t: tcp, -n: numeric, -H: no header
             res = subprocess.run(
                 ["ss", "-tnH"],
                 stdout=subprocess.PIPE,
@@ -156,7 +196,6 @@ class SocketScanner:
             if res.returncode == 0 and res.stdout:
                 for line in res.stdout.strip().splitlines():
                     parts = line.strip().split()
-                    # State Recv-Q Send-Q Local Address:Port Peer Address:Port
                     if len(parts) >= 4:
                         local_addr = parts[2] if parts[0] in ("ESTAB", "SYN-RECV") else parts[3]
                         p = SocketScanner._extract_port(local_addr)
@@ -165,8 +204,3 @@ class SocketScanner:
         except Exception:
             pass
         return counts
-
-    @staticmethod
-    def _scan_proc(sockets_by_port: Dict[int, Dict[int, ListeningSocket]], listener_pids: Dict[int, Set[int]]):
-        # Fallback reading /proc directly if ss is missing or limited
-        pass

@@ -7,8 +7,9 @@ CONFIG_DIR = Path.home() / ".config" / "whattheport"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
 DEFAULT_ALLOWLIST: Set[str] = {
-    "node", "npm", "npx", "pnpm", "yarn", "bun", "bunx", "deno", "turbo", "nx",
-    "python", "python3", "Python", "uv", "poetry", "pipenv", "uvicorn", "gunicorn", "flask", "django",
+    "node", "MainThread", "next-server", "vite", "esbuild", "tsx", "ts-node", "workerd", "nest",
+    "npm", "npx", "pnpm", "yarn", "bun", "bunx", "deno", "turbo", "nx",
+    "python", "python3", "Python", "uv", "poetry", "pipenv", "uvicorn", "gunicorn", "flask", "django", "celery",
     "ruby", "bundle", "rails", "puma", "unicorn",
     "php", "php-fpm",
     "java", "gradle", "mvn",
@@ -16,12 +17,14 @@ DEFAULT_ALLOWLIST: Set[str] = {
     "cargo", "rustc",
     "dotnet",
     "beam.smp", "elixir", "mix",
-    "nginx", "httpd", "apache", "caddy",
-    "postgres", "mysql", "mariadbd", "redis-server", "mongod",
-    "docker-proxy",
+    "nginx", "httpd", "apache", "apache2", "caddy",
+    "postgres", "mysql", "mysqld", "mariadbd", "redis-server", "mongod",
+    "docker-proxy", "rootlesskit", "pasta", "slirp4netns",
 }
 
-DEFAULT_PROTECTED: List[str] = ["postgres", "redis-server", "mongod", "mysqld", "mariadbd", "mysql"]
+DEFAULT_PROTECTED: List[str] = [
+    "postgres", "redis-server", "mongod", "mysqld", "mariadbd", "mysql", "docker-proxy"
+]
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "min_port": 3000,
@@ -93,11 +96,14 @@ class Preferences:
 
     @property
     def allowlist(self) -> Set[str]:
-        return set(self.data.get("allowlist", DEFAULT_ALLOWLIST))
+        # Always merge DEFAULT_ALLOWLIST so newly supported runners (e.g. MainThread) work even with existing config.json
+        configured = set(self.data.get("allowlist", DEFAULT_ALLOWLIST))
+        return configured | DEFAULT_ALLOWLIST
 
     @property
     def protected(self) -> Set[str]:
-        return set(self.data.get("protected_processes", DEFAULT_PROTECTED))
+        configured = set(self.data.get("protected_processes", DEFAULT_PROTECTED))
+        return configured | set(DEFAULT_PROTECTED)
 
     @property
     def cleanup_mode(self) -> str:

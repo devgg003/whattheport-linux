@@ -1,19 +1,26 @@
 """ScanEngine for discovering dev servers, tracking CPU/memory deltas, and hierarchies."""
 import os
+import subprocess
 import time
 from typing import Dict, List, Optional, Set, Tuple
 from whattheport.engine.agents import AgentSessionResolver
-from whattheport.engine.project import ProjectResolver
+from whattheport.engine.project import ProjectInfo, ProjectResolver
 from whattheport.engine.procs import ProcessInspector, ProcSnapshot, ProcArgs
 from whattheport.engine.scanner import SocketScanner, SocketScan
 from whattheport.engine.server import Server, ServerProcess, Sample
 from whattheport.engine.tree import ProcessTree
 
 RUNNERS: Set[str] = {
-    "node", "npm", "npx", "pnpm", "yarn", "bun", "bunx", "deno", "turbo", "nx",
+    "node", "MainThread", "next-server", "vite", "esbuild", "tsx", "ts-node", "workerd", "nest",
+    "npm", "npx", "pnpm", "yarn", "bun", "bunx", "deno", "turbo", "nx",
     "python", "python3", "Python", "uv", "poetry", "pipenv", "uvicorn", "gunicorn",
     "ruby", "bundle", "rails", "go", "air", "cargo", "java", "gradle", "mvn",
     "dotnet", "php", "mix", "beam.smp", "elixir",
+}
+
+EXCLUDED_DESKTOP_BINARIES: Set[str] = {
+    "electron", "cursor", "code", "claude-desktop", "antigravity",
+    "language_server", "chrome", "chromium", "firefox", "brave", "grok-bot"
 }
 
 SHELLS: Set[str] = {"sh", "bash", "zsh", "dash", "fish"}
@@ -30,6 +37,7 @@ class ScanEngine:
         self.histories: Dict[str, List[Sample]] = {}
         self.last_active: Dict[str, float] = {}
         self.args_cache: Dict[int, Tuple[float, Optional[ProcArgs]]] = {}
+        self.docker_cache: Tuple[float, Dict[int, Tuple[str, str]]] = (0.0, {})
 
     def scan(self, prefs) -> List[Server]:
         now = time.time()
@@ -43,6 +51,7 @@ class ScanEngine:
 
         servers: List[Server] = []
         seen_keys: Set[str] = set()
+        seen_ports: Set[int] = set()
         live_pids: Set[int] = set()
 
         min_port = prefs.min_port
@@ -53,12 +62,15 @@ class ScanEngine:
         for socket in sockets.listening:
             if socket.port < min_port or socket.port > max_port:
                 continue
-            if not self._is_allowed(socket.command, allowlist):
+            if socket.port in seen_ports:
                 continue
             listener = processes.get(socket.pid)
             if not listener:
                 continue
+            if not self._is_allowed_listener(socket.command, listener, allowlist):
+                continue
 
+            seen_ports.add(socket.port)
             service = ownership.service(listener.pid)
             root = self._root_process(listener, processes, ownership, service)
             tree = ownership.descendants(root.pid, service)
@@ -103,14 +115,24 @@ class ScanEngine:
 
             root_args = self._get_args(root)
             cwd = ProcessInspector.current_directory(listener.pid) or ProcessInspector.current_directory(root.pid)
-            if cwd == "/":
+            if cwd == "/" and socket.command != "docker-proxy":
                 continue
 
             env = self._inherited_environment(listener, root, processes)
             command_str = self.pretty_command(root_args.arguments, root.comm) if root_args else None
-            project = self.projects.resolve(cwd, command_str)
-            if not prefs.get("show_branches", True):
-                project.branch = None
+
+            if socket.command == "docker-proxy":
+                docker_info = self._resolve_docker_container(socket.port, now)
+                if docker_info:
+                    c_name, c_image = docker_info
+                    project = ProjectInfo(name=c_name, framework=f"Docker ({c_image})", branch="container")
+                    command_str = f"docker: {c_name} ({c_image})"
+                else:
+                    project = ProjectInfo(name=f"docker:{socket.port}", framework="Docker")
+            else:
+                project = self.projects.resolve(cwd, command_str)
+                if not prefs.get("show_branches", True):
+                    project.branch = None
 
             # Find launcher with intact arguments
             launch_chain = [listener]
@@ -182,6 +204,40 @@ class ScanEngine:
         servers.sort(key=lambda s: s.port)
         return servers
 
+    def _resolve_docker_container(self, port: int, now: float) -> Optional[Tuple[str, str]]:
+        cached_at, mapping = self.docker_cache
+        if now - cached_at > 10.0:
+            new_map: Dict[int, Tuple[str, str]] = {}
+            try:
+                res = subprocess.run(
+                    ["docker", "ps", "--format", "{{.Names}}\t{{.Image}}\t{{.Ports}}"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                    timeout=1.5,
+                    check=False
+                )
+                if res.returncode == 0 and res.stdout:
+                    for line in res.stdout.strip().splitlines():
+                        parts = line.split("\t")
+                        if len(parts) >= 3:
+                            name, image, ports_str = parts[0], parts[1], parts[2]
+                            for token in ports_str.split(","):
+                                if "->" in token:
+                                    host_part = token.split("->")[0].strip()
+                                    colon = host_part.rfind(":")
+                                    if colon != -1:
+                                        try:
+                                            p = int(host_part[colon + 1:])
+                                            new_map[p] = (name, image)
+                                        except ValueError:
+                                            pass
+            except Exception:
+                pass
+            self.docker_cache = (now, new_map)
+            mapping = new_map
+        return mapping.get(port)
+
     def _root_process(self, listener: ProcSnapshot, processes: Dict[int, ProcSnapshot], ownership: ProcessTree, service: Set[int]) -> ProcSnapshot:
         current = listener
         visited: Set[int] = {listener.pid}
@@ -195,14 +251,14 @@ class ScanEngine:
             if ownership.contains_other_service(parent.pid, service):
                 break
 
-            if self._is_allowed(parent.comm, RUNNERS) and not self._is_agent(parent):
+            if self._is_proc_allowed(parent, RUNNERS) and not self._is_agent(parent):
                 current = parent
                 continue
 
             # Stepping over package manager shell sh -c
             if parent.comm in SHELLS and parent.ppid > 1:
                 grandparent = processes.get(parent.ppid)
-                if grandparent and self._is_allowed(grandparent.comm, RUNNERS) and not self._is_agent(grandparent) and grandparent.pid not in visited:
+                if grandparent and self._is_proc_allowed(grandparent, RUNNERS) and not self._is_agent(grandparent) and grandparent.pid not in visited:
                     visited.add(grandparent.pid)
                     if ownership.contains_other_service(grandparent.pid, service):
                         current = parent
@@ -221,7 +277,42 @@ class ScanEngine:
         joined = " ".join([args.executable_path] + args.arguments[:3])
         return any(marker in joined for marker in AGENT_PATH_MARKERS)
 
+    def _is_allowed_listener(self, socket_command: str, listener: ProcSnapshot, allowlist: Set[str]) -> bool:
+        # Exclude desktop Electron/IDE processes
+        args = self._get_args(listener)
+        if args:
+            exe_base = os.path.basename(args.executable_path) if args.executable_path else ""
+            arg0_base = os.path.basename(args.arguments[0]) if args.arguments else ""
+            if exe_base in EXCLUDED_DESKTOP_BINARIES or arg0_base in EXCLUDED_DESKTOP_BINARIES or socket_command in EXCLUDED_DESKTOP_BINARIES:
+                return False
+
+        if self._is_allowed(socket_command, allowlist):
+            return True
+        return self._is_proc_allowed(listener, allowlist)
+
+    def _is_proc_allowed(self, proc: ProcSnapshot, allowlist: Set[str]) -> bool:
+        if self._is_allowed(proc.comm, allowlist):
+            return True
+        args = self._get_args(proc)
+        if not args:
+            return False
+        if args.executable_path:
+            exe_base = os.path.basename(args.executable_path)
+            if exe_base in EXCLUDED_DESKTOP_BINARIES:
+                return False
+            if self._is_allowed(exe_base, allowlist):
+                return True
+        if args.arguments:
+            arg0_base = os.path.basename(args.arguments[0].split()[0])
+            if arg0_base in EXCLUDED_DESKTOP_BINARIES:
+                return False
+            if self._is_allowed(arg0_base, allowlist):
+                return True
+        return False
+
     def _is_allowed(self, command: str, allowlist: Set[str]) -> bool:
+        if not command:
+            return False
         if command in allowlist:
             return True
         if "python3" in allowlist and command.startswith("python3."):
@@ -287,7 +378,7 @@ class ScanEngine:
 
         if exe in ("node", "bun", "deno") and len(parts) > 1:
             script = parts[1]
-            tools = ["npm", "npx", "pnpm", "yarn", "vite", "next", "astro", "nuxt", "storybook", "tsx", "turbo"]
+            tools = ["npm", "npx", "pnpm", "yarn", "vite", "next", "astro", "nuxt", "storybook", "tsx", "turbo", "playwright", "jest"]
             matched_tool = next((t for t in tools if f"/{t}/" in script or f"/{t}-cli" in script or os.path.basename(script) == t), None)
             if matched_tool:
                 parts = [matched_tool] + parts[2:]

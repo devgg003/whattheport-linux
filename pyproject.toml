@@ -39,4 +39,4 @@ wtp = "whattheport.tui.wtp:main"
 include = ["whattheport*"]
 
 [tool.setuptools.package-data]
-"whattheport.gui" = ["*.css"]
+"whattheport.gui" = ["*.css", "icons/*.svg"]

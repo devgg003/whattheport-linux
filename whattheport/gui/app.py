@@ -1,4 +1,4 @@
-"""Main GTK Application entry point with D-Bus toggle support and CSS styling."""
+"""Main GTK Application entry point with integrated top-bar StatusNotifierItem tray and CSS styling."""
 import os
 import sys
 from typing import Optional
@@ -9,6 +9,7 @@ from gi.repository import Gtk, Gdk, Adw, Gio
 from whattheport.engine.prefs import Preferences
 from whattheport.engine.monitor import ServerMonitor
 from whattheport.gui.popover import PopoverWindow
+from whattheport.gui.tray_status_notifier import StatusNotifierTray
 
 APP_ID = "dev.whattheport.WhatThePort"
 
@@ -21,24 +22,61 @@ class WhatThePortApp(Adw.Application):
         self.prefs = Preferences()
         self.monitor = ServerMonitor(self.prefs)
         self.window: Optional[PopoverWindow] = None
+        self.tray: Optional[StatusNotifierTray] = None
+        self._held = False
 
     def do_startup(self):
         Adw.Application.do_startup(self)
         self._load_css()
         self.monitor.start()
 
-    def do_activate(self):
+        # Keep application alive in background so the top-bar tray icon persists
+        if not self._held:
+            self.hold()
+            self._held = True
+
+        # Start top-bar StatusNotifierItem indicator inside the application
+        self.tray = StatusNotifierTray(
+            self.monitor,
+            on_open_dashboard=self.present_dashboard,
+            on_quit=self.quit_app
+        )
+        self.tray.start()
+
+    def _ensure_window(self):
         if not self.window:
             self.window = PopoverWindow(self.monitor)
+            self.window.connect("close-request", self._on_window_close_request)
             self.add_window(self.window)
 
-        if self.window.is_visible():
-            self.window.set_visible(False)
-        else:
-            self.window.present()
+    def _on_window_close_request(self, window):
+        # Hide window to top-bar tray instead of quitting the app
+        window.set_visible(False)
+        return True
+
+    def present_dashboard(self):
+        self._ensure_window()
+        self.window.set_visible(True)
+        self.window.present()
+        return False
+
+    def quit_app(self):
+        self.monitor.stop()
+        if self._held:
+            self.release()
+            self._held = False
+        self.quit()
+        return False
+
+    def do_activate(self):
+        self.present_dashboard()
 
     def do_command_line(self, command_line):
-        self.activate()
+        args = command_line.get_arguments()
+        if "--tray" in args:
+            # Start quietly in the top bar without opening the dashboard window
+            return 0
+        self.present_dashboard()
         return 0
 
     def _load_css(self):

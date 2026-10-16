@@ -22,7 +22,7 @@ chmod +x "$BIN_DIR/whattheport"
 
 cat << 'EOF' > "$BIN_DIR/whattheport-tray"
 #!/usr/bin/env bash
-PYTHONPATH="$HOME/.local/share/whattheport" exec python3 -m whattheport.gui.tray_status_notifier "$@"
+PYTHONPATH="$HOME/.local/share/whattheport" exec python3 -m whattheport.gui.app --tray "$@"
 EOF
 chmod +x "$BIN_DIR/whattheport-tray"
 
@@ -38,7 +38,7 @@ cat << EOF > "$DESKTOP_DIR/dev.whattheport.WhatThePort.desktop"
 Name=WhatThePort
 Comment=Dev servers in your top bar
 Exec=$BIN_DIR/whattheport
-Icon=network-server
+Icon=$APP_DIR/whattheport/gui/icons/wtp-normal.svg
 Terminal=false
 Type=Application
 Categories=Development;Utility;
@@ -51,6 +51,7 @@ cat << EOF > "$AUTOSTART_DIR/whattheport-tray.desktop"
 Name=WhatThePort Tray
 Comment=WhatThePort system tray service
 Exec=$BIN_DIR/whattheport-tray
+Icon=$APP_DIR/whattheport/gui/icons/wtp-normal.svg
 Terminal=false
 Type=Application
 Categories=Utility;Development;
@@ -62,7 +63,7 @@ echo "==> Autostart entry installed: $AUTOSTART_DIR/whattheport-tray.desktop"
 
 # 5. Launch or restart tray service if in a desktop session
 if [ -n "$DISPLAY" ] || [ -n "$WAYLAND_DISPLAY" ]; then
-    pkill -f "whattheport.gui.tray_status_notifier" 2>/dev/null || true
+    pkill -f "whattheport.gui" 2>/dev/null || true
     nohup "$BIN_DIR/whattheport-tray" >/dev/null 2>&1 &
     disown 2>/dev/null || true
     echo "==> System tray daemon started!"

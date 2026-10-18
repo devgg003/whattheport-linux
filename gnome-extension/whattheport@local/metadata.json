@@ -10,5 +10,6 @@
     "49",
     "50"
   ],
+  "session-modes": ["ubuntu", "user"],
   "url": "https://whattheport.dev"
 }

@@ -1,15 +1,22 @@
 """FreeDesktop StatusNotifierItem (SNI) + Ayatana Label + DBusMenu implementation for WhatThePort."""
+import json
 import os
 import subprocess
+import time
 from typing import Callable, Optional
 import gi
 gi.require_version('Gio', '2.0')
 gi.require_version('GLib', '2.0')
 from gi.repository import Gio, GLib
 
-from whattheport.engine.format import bytes_str
+from whattheport.engine.control import ProcessControl
+from whattheport.engine.format import bytes_str, duration, percent, port_color, total_str
 from whattheport.engine.monitor import ServerMonitor
 from whattheport.engine.prefs import Preferences
+from whattheport.engine.server import Server, ServerStatus
+
+BUS_NAME = "dev.whattheport.WhatThePort"
+GLANCE_PATH = "/dev/whattheport/Glance"
 
 # Note: Omitting <method name="Activate"> intentionally tells Ubuntu's
 # ubuntu-appindicators@ubuntu.com extension that single-left-click should
@@ -100,6 +107,24 @@ DBUSMENU_XML = """
 </node>
 """
 
+GLANCE_XML = """
+<node>
+  <interface name="dev.whattheport.Glance">
+    <method name="GetGlance">
+      <arg type="s" name="json" direction="out"/>
+    </method>
+    <method name="OpenServer">
+      <arg type="u" name="port" direction="in"/>
+    </method>
+    <method name="StopServer">
+      <arg type="u" name="port" direction="in"/>
+    </method>
+    <method name="Quit"/>
+    <method name="OpenDashboard"/>
+  </interface>
+</node>
+"""
+
 class StatusNotifierTray:
     def __init__(
         self,
@@ -113,8 +138,10 @@ class StatusNotifierTray:
         self.connection: Optional[Gio.DBusConnection] = None
         self.sni_reg_id = 0
         self.menu_reg_id = 0
+        self.glance_reg_id = 0
         self.revision = 1
         self.action_callbacks = {}
+        self._retired = {}  # port -> {"server", "state", "since"}
         self.icons_dir = os.path.join(os.path.dirname(__file__), "icons")
 
         self.monitor.add_listener(self._on_monitor_updated)
@@ -143,6 +170,16 @@ class StatusNotifierTray:
             None
         )
 
+        glance_node = Gio.DBusNodeInfo.new_for_xml(GLANCE_XML)
+        self.glance_reg_id = bus.register_object(
+            GLANCE_PATH,
+            glance_node.interfaces[0],
+            self._handle_glance_method,
+            None,
+            None
+        )
+        self._own_bus_name()
+
         # Register with StatusNotifierWatcher
         try:
             bus.call_sync(
@@ -158,6 +195,110 @@ class StatusNotifierTray:
             )
         except Exception as e:
             print(f"StatusNotifierWatcher registration notice: {e}")
+
+    def _own_bus_name(self):
+        """Expose GetGlance on the app id so the top-bar hover card can read it."""
+        if not self.connection:
+            return
+        try:
+            # 4 = DO_NOT_QUEUE. Same-connection owners get ALREADY_OWNER.
+            self.connection.call_sync(
+                "org.freedesktop.DBus",
+                "/org/freedesktop/DBus",
+                "org.freedesktop.DBus",
+                "RequestName",
+                GLib.Variant("(su)", (BUS_NAME, 4)),
+                GLib.VariantType("(u)"),
+                Gio.DBusCallFlags.NONE,
+                1000,
+                None
+            )
+        except Exception as e:
+            print(f"WhatThePort glance bus name: {e}")
+
+    def glance_data(self) -> dict:
+        monitor = self.monitor
+        threshold = monitor.prefs.threshold_bytes
+        active, retired = self._partition_servers()
+        servers = []
+        for server in active:
+            detail = []
+            if server.agent and (server.agent.title or server.agent.kind):
+                detail.append(server.agent.title or server.agent.kind)
+            elif server.project and server.project.branch:
+                detail.append(server.project.branch)
+            elif not server.cwd_exists:
+                detail.append("Worktree deleted")
+            detail.append(f"up {duration(server.uptime)}")
+            attention = server.is_leaking() or server.status(threshold) == ServerStatus.ATTENTION
+            servers.append({
+                "port": server.port,
+                "name": server.display_name,
+                "memory": bytes_str(server.memory),
+                "cpu": percent(server.cpu),
+                "detail": " · ".join(detail),
+                "color": port_color(monitor.color_index(server.port), dark=True),
+                "attention": attention,
+                "protected": server.is_protected,
+            })
+        return {
+            "memory": total_str(sum(s.memory for s in active)),
+            "cpu": percent(monitor.total_server_cpu),
+            "count": len(servers),
+            "servers": servers,
+            "retired": [
+                {
+                    "port": entry["server"].port,
+                    "name": entry["server"].display_name,
+                    "state": entry["state"],
+                }
+                for entry in retired
+            ],
+        }
+
+    def _live_server(self, port: int) -> Optional[Server]:
+        for server in self.monitor.servers:
+            if server.port == port:
+                return server
+        return None
+
+    def _tooltip_text(self) -> tuple:
+        data = self.glance_data()
+        title = f"{data['memory']}  ·  CPU {data['cpu']}  ·  {self._current_label()}"
+        if not data["servers"]:
+            return title, "No dev servers running"
+        lines = [
+            f":{s['port']}   {s['name']}   {s['memory']}"
+            for s in data["servers"][:6]
+        ]
+        extra = data["count"] - len(lines)
+        if extra > 0:
+            lines.append(f"+{extra} more")
+        return title, "\n".join(lines)
+
+    def _handle_glance_method(self, conn, sender, path, iface, method, params, invocation):
+        if method == "GetGlance":
+            invocation.return_value(GLib.Variant("(s)", (json.dumps(self.glance_data()),)))
+            return
+        if method == "Quit":
+            invocation.return_value(None)
+            if self.on_quit:
+                GLib.idle_add(self.on_quit)
+            return
+        if method == "OpenDashboard":
+            invocation.return_value(None)
+            if self.on_open_dashboard:
+                GLib.idle_add(self.on_open_dashboard)
+            return
+        if method in ("OpenServer", "StopServer"):
+            (port,) = params.unpack()
+            server = self._live_server(int(port))
+            if server is not None:
+                if method == "OpenServer":
+                    self._open_server(server)
+                else:
+                    self._stop_server(server)
+        invocation.return_value(None)
 
     def _current_label(self) -> str:
         cnt = len(self.monitor.servers)
@@ -237,10 +378,8 @@ class StatusNotifierTray:
         elif prop == "XAyatanaLabelGuide":
             return GLib.Variant("s", "99 servers")
         elif prop == "ToolTip":
-            tot_mem = self.monitor.total_server_memory
-            title = f"WhatThePort ({self._current_label()})"
-            sub = f"RAM: {bytes_str(tot_mem)}"
-            return GLib.Variant("(sa(ii)ss)", ("network-server", [], title, sub))
+            title, body = self._tooltip_text()
+            return GLib.Variant("(sa(ii)ss)", ("network-server", [], title, body))
         return None
 
     def _handle_sni_method(self, conn, sender, path, iface, method, params, invocation):
@@ -253,6 +392,61 @@ class StatusNotifierTray:
             GLib.idle_add(self.on_open_dashboard)
         else:
             subprocess.Popen([os.path.expanduser("~/.local/bin/whattheport")])
+
+    def _open_server(self, server: Server):
+        subprocess.Popen(["xdg-open", server.url])
+
+    def _stop_server(self, server: Server):
+        if server.is_protected or server.port in self._retired:
+            return
+        seconds = 3.0
+        prefs = getattr(self.monitor, "prefs", None)
+        if prefs is not None:
+            try:
+                seconds = float(prefs.get("force_quit_seconds", 3.0))
+            except (TypeError, ValueError):
+                seconds = 3.0
+        self._retired[server.port] = {
+            "server": server,
+            "state": "stopping",
+            "since": time.time(),
+        }
+        ProcessControl.stop(
+            server,
+            force_quit_seconds=seconds,
+            completion=lambda: GLib.idle_add(self._mark_stopped, server.port),
+        )
+        self._emit_updates()
+
+    def _mark_stopped(self, port: int):
+        entry = self._retired.get(port)
+        if entry and entry["state"] != "stopped":
+            entry["state"] = "stopped"
+            entry["since"] = time.time()
+            self._emit_updates()
+        return False
+
+    def _server_menu_label(self, server: Server, suffix: str = "") -> str:
+        branch = f" ({server.project.branch})" if server.project and server.project.branch else ""
+        label = f":{server.port}  {server.display_name}{branch}  ―  {bytes_str(server.memory)}"
+        if suffix:
+            label = f"{label}  {suffix}"
+        return label
+
+    def _partition_servers(self):
+        live = {s.port: s for s in self.monitor.servers}
+        for port, entry in list(self._retired.items()):
+            if port in live and entry["state"] == "stopped":
+                del self._retired[port]
+                continue
+            if port in live:
+                entry["server"] = live[port]
+            elif entry["state"] == "stopping":
+                entry["state"] = "stopped"
+                entry["since"] = time.time()
+        active = [s for s in self.monitor.servers if s.port not in self._retired]
+        retired = list(self._retired.values())
+        return active, retired
 
     def _handle_menu_prop_get(self, conn, sender, path, iface, prop):
         if prop == "Version":
@@ -273,8 +467,7 @@ class StatusNotifierTray:
         elif method == "Event":
             item_id, event_id, data, timestamp = params.unpack()
             if event_id == "clicked" and item_id in self.action_callbacks:
-                cb = self.action_callbacks[item_id]
-                cb()
+                self.action_callbacks[item_id]()
             invocation.return_value(None)
         elif method == "GetGroupProperties":
             invocation.return_value(GLib.Variant("(a(ia{sv}))", ([],)))
@@ -287,13 +480,13 @@ class StatusNotifierTray:
         children = []
         next_id = 1
 
-        servers = self.monitor.servers
-        tot_mem = self.monitor.total_server_memory
+        active, retired = self._partition_servers()
+        tot_mem = sum(s.memory for s in active)
 
         # Header item: Servers summary
         hdr_id = next_id
         next_id += 1
-        summary_text = f"Servers: {bytes_str(tot_mem)} ({len(servers)} active)"
+        summary_text = f"Servers: {bytes_str(tot_mem)} ({len(active)} active)"
         hdr_props = {
             "label": GLib.Variant("s", summary_text),
             "enabled": GLib.Variant("b", False),
@@ -307,8 +500,9 @@ class StatusNotifierTray:
         v_sep1 = GLib.Variant('(ia{sv}av)', (sep1_id, {"type": GLib.Variant("s", "separator")}, []))
         children.append(v_sep1)
 
-        # Server items
-        if not servers:
+        # The top-bar menu gives each entry one click. The server name opens
+        # the address. The stop icon beside that action is its own entry.
+        if not active and not retired:
             empty_id = next_id
             next_id += 1
             v_empty = GLib.Variant(
@@ -317,20 +511,55 @@ class StatusNotifierTray:
             )
             children.append(v_empty)
         else:
-            for s in servers:
+            for s in active:
                 s_id = next_id
                 next_id += 1
-                sub = f" ({s.project.branch})" if s.project and s.project.branch else ""
-                label = f":{s.port}  {s.display_name}{sub}  ―  {bytes_str(s.memory)}"
                 s_props = {
-                    "label": GLib.Variant("s", label),
+                    "label": GLib.Variant("s", self._server_menu_label(s)),
                     "enabled": GLib.Variant("b", True),
                 }
+                self.action_callbacks[s_id] = lambda srv=s: self._open_server(srv)
+                children.append(GLib.Variant('(ia{sv}av)', (s_id, s_props, [])))
+                if not s.is_protected:
+                    stop_id = next_id
+                    next_id += 1
+                    self.action_callbacks[stop_id] = lambda srv=s: self._stop_server(srv)
+                    children.append(GLib.Variant(
+                        '(ia{sv}av)',
+                        (stop_id, {
+                            "label": GLib.Variant("s", "Stop"),
+                            "enabled": GLib.Variant("b", True),
+                            "icon-name": GLib.Variant("s", "media-playback-stop-symbolic"),
+                        }, []),
+                    ))
 
-                url = s.url
-                self.action_callbacks[s_id] = lambda u=url: subprocess.Popen(["xdg-open", u])
-                v_s = GLib.Variant('(ia{sv}av)', (s_id, s_props, []))
-                children.append(v_s)
+        if retired:
+            sep_retired_id = next_id
+            next_id += 1
+            children.append(GLib.Variant(
+                '(ia{sv}av)',
+                (sep_retired_id, {"type": GLib.Variant("s", "separator")}, [])
+            ))
+            heading_id = next_id
+            next_id += 1
+            children.append(GLib.Variant(
+                '(ia{sv}av)',
+                (heading_id, {
+                    "label": GLib.Variant("s", "stopping/stopped"),
+                    "enabled": GLib.Variant("b", False),
+                }, [])
+            ))
+            for entry in retired:
+                s = entry["server"]
+                row_id = next_id
+                next_id += 1
+                children.append(GLib.Variant(
+                    '(ia{sv}av)',
+                    (row_id, {
+                        "label": GLib.Variant("s", self._server_menu_label(s, entry["state"])),
+                        "enabled": GLib.Variant("b", False),
+                    }, [])
+                ))
 
         # Separator
         sep2_id = next_id
@@ -338,7 +567,18 @@ class StatusNotifierTray:
         v_sep2 = GLib.Variant('(ia{sv}av)', (sep2_id, {"type": GLib.Variant("s", "separator")}, []))
         children.append(v_sep2)
 
-        # Open Full Dashboard
+        # Gray section label, then the dashboard link
+        settings_id = next_id
+        next_id += 1
+        v_settings = GLib.Variant(
+            '(ia{sv}av)',
+            (settings_id, {
+                "label": GLib.Variant("s", "settings"),
+                "enabled": GLib.Variant("b", False),
+            }, [])
+        )
+        children.append(v_settings)
+
         dash_id = next_id
         next_id += 1
         self.action_callbacks[dash_id] = self._trigger_open_dashboard

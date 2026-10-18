@@ -1,8 +1,13 @@
-"""Cairo-based drawing widgets for memory bar, sparklines, and history charts."""
+"""Drawing widgets for the memory bar, sparklines, and history charts.
+
+The memory bar paints with GTK's snapshot API so it still shows when the
+PyGObject Cairo bridge (python3-gi-cairo) is missing. Sparklines and the
+detail chart still use Cairo.
+"""
 import cairo  # noqa: F401 - required by PyGObject for cairo.Context foreign struct converter
 import gi
 gi.require_version('Gtk', '4.0')
-from gi.repository import Gtk
+from gi.repository import Gtk, Gdk, Graphene, Gsk
 from typing import List, Optional, Tuple
 from whattheport.engine.format import PALETTE_AMBER
 
@@ -10,16 +15,21 @@ def hex_to_rgb(hex_code: str) -> Tuple[float, float, float]:
     hex_code = hex_code.lstrip("#")
     return tuple(int(hex_code[i:i+2], 16) / 255.0 for i in (0, 2, 4))
 
-class MemoryBar(Gtk.DrawingArea):
+class MemoryBar(Gtk.Widget):
     """Segmented horizontal memory bar: servers by color, other apps, free RAM."""
     def __init__(self):
         super().__init__()
-        self.set_content_height(10)
         self.set_hexpand(True)
+        self.set_valign(Gtk.Align.CENTER)
+        self.set_size_request(-1, 10)
         self.segments: List[Tuple[float, str]] = []  # [(fraction, hex_color)]
         self.other_fraction: float = 0.0
         self.free_fraction: float = 1.0
-        self.set_draw_func(self._on_draw)
+
+    def do_measure(self, orientation, for_size):
+        if orientation == Gtk.Orientation.VERTICAL:
+            return 10, 10, -1, -1
+        return 40, 40, -1, -1
 
     def set_data(self, segments: List[Tuple[float, str]], other_fraction: float):
         self.segments = segments
@@ -28,42 +38,60 @@ class MemoryBar(Gtk.DrawingArea):
         self.free_fraction = max(0.0, 1.0 - (server_total + other_fraction))
         self.queue_draw()
 
-    def _on_draw(self, area, cr, width, height):
-        radius = 5.0
+    def do_snapshot(self, snapshot):
+        width = float(self.get_width())
+        height = float(self.get_height())
+        if width <= 0 or height <= 0:
+            return
 
-        # Rounded rectangle clip
-        cr.new_sub_path()
-        cr.arc(width - radius, radius, radius, -1.5707963, 0)
-        cr.arc(width - radius, height - radius, radius, 0, 1.5707963)
-        cr.arc(radius, height - radius, radius, 1.5707963, 3.1415926)
-        cr.arc(radius, radius, radius, 3.1415926, 4.7123889)
-        cr.close_path()
-        cr.clip()
+        radius = min(3.0, height / 2.0)
+        bounds = Graphene.Rect().init(0, 0, width, height)
+        clip = Gsk.RoundedRect().init_from_rect(bounds, radius)
+        snapshot.push_rounded_clip(clip)
 
-        # Background track (free ram)
-        cr.set_source_rgba(1.0, 1.0, 1.0, 0.08)
-        cr.paint()
+        def color_of(r, g, b, a):
+            color = Gdk.RGBA()
+            color.red, color.green, color.blue, color.alpha = r, g, b, a
+            return color
 
-        current_x = 0.0
-
-        # Draw server segments
-        for frac, hex_col in self.segments:
-            seg_w = width * frac
+        def fill(x, seg_w, color):
             if seg_w <= 0:
+                return
+            snapshot.append_color(color, Graphene.Rect().init(x, 0, seg_w, height))
+
+        # Full-width track is free RAM. It has to stay visible on the dark panel,
+        # otherwise a half-used machine looks like a bar that stops halfway.
+        fill(0, width, color_of(1, 1, 1, 0.16))
+
+        slices = []
+        for frac, hex_col in self.segments:
+            if frac <= 0:
                 continue
             r, g, b = hex_to_rgb(hex_col)
-            cr.set_source_rgb(r, g, b)
-            cr.rectangle(current_x, 0, seg_w, height)
-            cr.fill()
-            current_x += seg_w
-
-        # Draw other apps segment
+            slices.append((frac, color_of(r, g, b, 1.0), True))
         if self.other_fraction > 0:
-            seg_w = width * self.other_fraction
-            cr.set_source_rgba(1.0, 1.0, 1.0, 0.25)
-            cr.rectangle(current_x, 0, seg_w, height)
-            cr.fill()
-            current_x += seg_w
+            slices.append((self.other_fraction, color_of(1, 1, 1, 0.42), False))
+
+        widths = []
+        for frac, _color, is_server in slices:
+            seg_w = width * frac
+            # A few MB against several GB is under a pixel and vanishes inside the
+            # rounded end. Keep a hairline so each server color still shows.
+            if is_server and 0 < seg_w < 3.0:
+                seg_w = 3.0
+            widths.append(seg_w)
+
+        used = sum(widths)
+        if used > width and used > 0:
+            scale = width / used
+            widths = [seg_w * scale for seg_w in widths]
+
+        x = 0.0
+        for seg_w, (_frac, color, _is_server) in zip(widths, slices):
+            fill(x, seg_w, color)
+            x += seg_w
+
+        snapshot.pop()
 
 class Sparkline(Gtk.DrawingArea):
     """Mini 10-minute memory/CPU trend curve."""

@@ -2,6 +2,8 @@
 import os
 import sys
 from typing import Optional
+
+import cairo  # noqa: F401 - register cairo.Context before GTK loads
 import gi
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
@@ -50,8 +52,8 @@ class WhatThePortApp(Adw.Application):
             self.add_window(self.window)
 
     def _on_window_close_request(self, window):
-        # Hide window to top-bar tray instead of quitting the app
-        window.set_visible(False)
+        # Closing the window quits the app, which drops the top-bar icon.
+        self.quit_app()
         return True
 
     def present_dashboard(self):

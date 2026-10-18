@@ -2,123 +2,88 @@
 
 # WhatThePort for Linux
 
-**Dev servers in your Linux top bar and terminal.**  
-A native Linux port of [WhatThePort](https://github.com/tomjohndesign/what-the-port) built with GTK 4, libadwaita, FreeDesktop `StatusNotifierItem`, and Linux `/proc`.
+**Every dev server on your machine, one click away in the top bar.**
+A Linux port of [WhatThePort](https://github.com/tomjohndesign/what-the-port): a single Rust binary plus a GNOME Shell panel menu.
 
 [![Platform: Linux](https://img.shields.io/badge/Platform-Linux-FCC624?logo=linux&logoColor=black)](#requirements)
-[![UI: GTK 4 + libadwaita](https://img.shields.io/badge/UI-GTK_4_%2B_libadwaita-4A86CF?logo=gnome&logoColor=white)](#ui-layout--anatomy)
-[![Python: 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](#requirements)
+[![Rust](https://img.shields.io/badge/Rust-2024-B7410E?logo=rust&logoColor=white)](#building)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-<br/>
-
-<img src="assets/hero-overview.svg" alt="WhatThePort Linux — Popover, Detail View, and Top-Bar Tray" width="100%"/>
-
 </div>
 
 ---
 
-## Why WhatThePort?
+## Why
 
-Modern development workflows—especially when running multiple AI coding agents (Claude Code, Codex) across git worktrees—quietly leave behind orphaned `next dev`, `vite`, `uvicorn`, and `cargo` processes eating gigabytes of RAM and occupying ports.
+Running several AI coding agents across git worktrees leaves orphaned `next dev`, `vite`, `uvicorn` and `cargo` processes holding ports and gigabytes of RAM. WhatThePort finds every local dev server, groups its whole process tree, names the project and branch, links the agent session that started it, and warns you before a leak sends your machine into swap.
 
-**WhatThePort for Linux** lives in your desktop top bar and terminal (`wtp`), discovering every active local dev server, grouping its entire process tree, resolving its project name and git branch, and flagging memory leaks or deleted worktrees before your machine swaps.
+## The panel menu
 
----
-
-## Features
-
-| Feature | Description |
-| :--- | :--- |
-| **Top-Bar System Tray (`whattheport-tray`)** | Native FreeDesktop `StatusNotifierItem` + `dbusmenu` indicator that works out of the box on Ubuntu GNOME, KDE Plasma, XFCE, and Cinnamon. Hover for RAM summary or click to open servers in a single click. |
-| **Dark GTK 4 Dashboard (`whattheport`)** | Segmented whole-system memory bar (color-coded by `:port`), live Cairo sparklines, 10-minute memory & CPU history charts, and process tree inspector. |
-| **Process Tree Ownership** | Walks `/proc/<pid>` parent/child hierarchies and shared socket fds so wrapper processes (`npm` → `sh` → `next-server`) report unified RSS memory and CPU usage. |
-| **Project & Git Worktree Detection** | Automatically parses `package.json`, `pyproject.toml`, `Cargo.toml`, `go.mod`, `Gemfile`, and `.git/HEAD` (including linked git worktrees). |
-| **AI Agent Session Linking** | Links dev servers directly to the **Claude Code** (`CLAUDE_CODE_SESSION_ID`) or **Codex** session that spawned them, displaying the conversation title. |
-| **Leak & High-RAM Alerts** | Highlights servers in amber (`#FFB224`) and sends desktop notifications (`notify-send`) when a server exceeds your RAM threshold (default `2.0 GB`) or grows by `>500 MB` in 10 minutes. |
-| **Smart Clean Up & DB Protection** | Recommends stopping servers from deleted git worktrees or long-idle ports while automatically protecting databases (`postgres`, `redis-server`, `mysqld`, `mongod`). |
-| **Terminal UI & JSON CLI (`wtp`)** | Full interactive curses TUI (`wtp`) for SSH/terminal sessions plus machine-readable `wtp --json` output for scripts and status bars (Waybar, Polybar, tmux). |
-
----
-
-## UI Layout & Anatomy
-
-### 1. Main Dashboard (`whattheport`) & Detail View
+Click the dot-grid icon in the top bar. Everything is in that one menu:
 
 ```text
-┌──────────────────────────────────────────┐     ┌──────────────────────────────────────────┐
-│                 Servers                  │     │ [‹] : 3000  web-dashboard        [↻] [■] │
-│ 3.4 GB                CPU (servers) 8.4% │     │                                          │
-│ [████░░░░▒▒▒▒▓▓░░░░░░░░░░░░░░░░░░░░░░░░] │     │ Session   ✴ Fix OAuth callback           │
-│ ■ Servers 3.4 GB ― Other 7.1 ― Free 5.5  │     │ Branch    feat/auth                      │
-│──────────────────────────────────────────│     │ Uptime    42m                            │
-│ : 3000  web-dashboard     ╱╲╱─  640 MB ■ │ ──▶ │ Command   next dev --turbopack -p 3000   │
-│         ✴ Fix OAuth · feat/auth · up 42m │     │                                          │
-│ : 4321  docs-astro        ────  312 MB ■ │     │ Memory  640 MB                    10 min │
-│         main · up 2h 15m                 │     │ ┌──────────────────────────────────────┐ │
-│ : 5173  studio-vite       ▁▃▅▇ 2.18 GB ■ │     │ │ - - - - - - - - - - (Threshold 2 GB) │ │
-│         +620 MB in 10 min (Amber Alert)  │     │ │              ╭───────────●           │ │
-│ : 8000  billing-api       ────  268 MB ■ │     │ └──────────────────────────────────────┘ │
-│         Worktree deleted · up 5h         │     │ CPU  6.2%                                │
-│──────────────────────────────────────────│     │ ┌──────────────────────────────────────┐ │
-│ [ Clean up 1 ]                       [⚙] │     │ │  ▂▄▁▆▃▂▁▅▂▁▂▇▄▂▁▃▂▄▂▃               │ │
-└──────────────────────────────────────────┘     │ └──────────────────────────────────────┘ │
-                                                 │ Processes (3)                     640 MB │
-                                                 │   pnpm dev                      42 MB·0% │
-                                                 │     next dev --turbopack     118 MB·0.4% │
-                                                 │       next-server (v15.2.0)  480 MB·5.8% │
-                                                 │                                          │
-                                                 │ [ Open localhost:3000 ] [▲ Preview] [PR] │
-                                                 └──────────────────────────────────────────┘
+ ⠿ 3
+┌────────────────────────────────────────────────┐
+│ 3.4 GB  in 3 servers                  CPU 8.4% │
+│ [████▒▒▒▓▓░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░] │
+│ Other 7.1 GB  ·  Free 5.5 GB                   │
+├────────────────────────────────────────────────┤
+│ :3000  web-dashboard          ╱╲╱─  640 MB 🌐 ■ ›│  click a row to expand it
+│        Fix OAuth callback · up 42m             │
+│   Framework  Next.js 15                        │
+│   Session    Claude Code: Fix OAuth callback   │
+│   Command    next dev --turbopack -p 3000      │
+│   Processes (3)                                │
+│     pnpm dev                    42 MB · 0%     │
+│       next dev --turbopack     118 MB · 0.4%   │
+│         next-server            480 MB · 5.8%   │
+│   [Open] [PR #128] [Restart] [Stop]            │
+│ :5173  studio-vite            ▁▃▅▇ 2.18 GB 🌐 ■ ›│  amber: over threshold or leaking
+│ :8000  billing-api            ────  268 MB 🌐 ■ ›│
+│        Worktree deleted · up 5h                │
+├────────────────────────────────────────────────┤
+│ 🧹 Clean up 1 server                            │
+│ ⚙ Settings                                   › │  thresholds, cleanup mode, toggles,
+│ ⏻ Quit WhatThePort                             │  launch at login
+└────────────────────────────────────────────────┘
 ```
 
-### 2. Terminal UI (`wtp`)
+- **Process trees**: wrapper chains (`pnpm` → `sh -c` → `next dev` → `next-server`) are reported as one server with combined memory and CPU.
+- **Projects and branches** are read from `package.json`, `pyproject.toml`, `Cargo.toml`, `go.mod`, `Gemfile` and `.git/HEAD`, including linked worktrees.
+- **Agent sessions**: servers started by Claude Code (`CLAUDE_CODE_SESSION_ID`) or Codex show the conversation title.
+- **Alerts**: a desktop notification with **Stop** and **Mute alerts** buttons appears when a server passes the memory threshold (default 2 GB) or grows by more than 500 MB in 10 minutes.
+- **Clean up**: servers from deleted worktrees, idle ones and long-running ones are suggested for cleanup (or stopped automatically, if you choose). Databases such as `postgres`, `redis-server`, `mysqld` and `mongod` are never stopped.
+- **Stop and restart**: SIGTERM to the whole tree, then SIGKILL after 3 seconds for anything still running. Restart re-runs the original command in its original folder, logging to `~/.local/state/whattheport/port-N.log`.
 
-<div align="center">
-<img src="assets/tui-preview.svg" alt="wtp Terminal UI Preview" width="85%"/>
-</div>
+On KDE Plasma, XFCE, Cinnamon and other desktops with a StatusNotifier tray, the same menu appears as a tray icon, with each server as a submenu.
 
----
+## Terminal
+
+```console
+$ wtp
+:3000   web-dashboard     640 MB    0.4%  Fix OAuth callback · up 42m
+:5173   studio-vite      2.18 GB   12.0%  main · up 2h 15m
+:8000   billing-api       268 MB      0%  Worktree deleted · up 5h · clean up: Worktree deleted
+
+3.1 GB in servers · 7.1 GB other · 5.5 GB free · CPU 1.6%
+
+$ wtp stop 8000
+$ wtp restart 3000
+$ wtp --json        # full state for scripts, Waybar, Polybar, tmux
+```
+
+When the background service is running, `wtp` reads its state (including CPU and 10-minute history); otherwise it does a quick scan itself.
 
 ## Requirements
 
-- **OS**: Linux (Ubuntu 22.04+, Debian 12+, Fedora 39+, Arch Linux)
-- **Python**: `3.10+`
-- **System Packages**: GTK 4, libadwaita, PyGObject + Cairo bindings, `ss` (`iproute2`), and `libnotify` (`notify-send`)
-- **Optional**: GitHub CLI (`gh`) for Vercel preview and Pull Request badges
+- Linux with `/proc` (any modern distribution)
+- GNOME Shell 45–50 for the panel menu, or any desktop with a StatusNotifier tray
+- Rust 1.88+ to build (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`)
+- Optional: GitHub CLI (`gh`) for pull request and Vercel preview links
 
-### Install System Dependencies
+There are no runtime dependencies: no Python, GTK or `ss`.
 
-<details open>
-<summary><b>Ubuntu / Debian / Pop!_OS / Linux Mint</b></summary>
-
-```bash
-sudo apt update
-sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 iproute2 libnotify-bin
-```
-</details>
-
-<details>
-<summary><b>Fedora / RHEL</b></summary>
-
-```bash
-sudo dnf install python3-gobject cairo-gobject gtk4 libadwaita iproute libnotify
-```
-</details>
-
-<details>
-<summary><b>Arch Linux / Manjaro</b></summary>
-
-```bash
-sudo pacman -S python-gobject python-cairo gtk4 libadwaita iproute2 libnotify
-```
-</details>
-
----
-
-## Installation
-
-Clone the repository and run the installer script:
+## Install
 
 ```bash
 git clone https://github.com/devgg003/whattheport-linux.git
@@ -126,184 +91,77 @@ cd whattheport-linux
 ./install.sh
 ```
 
-### What `./install.sh` Sets Up
+The installer builds the binary, installs `~/.local/bin/wtp`, the icons, an app launcher entry and the GNOME extension, removes any old Python version, and starts the service. On GNOME, log out and back in once so the shell loads the extension.
 
-| Component | Installed Path | Purpose |
-| :--- | :--- | :--- |
-| **`whattheport`** | `~/.local/bin/whattheport` | Launches or toggles the GTK 4 dark dashboard window |
-| **`whattheport-tray`** | `~/.local/bin/whattheport-tray` | Background FreeDesktop `StatusNotifierItem` top-bar indicator daemon |
-| **`wtp`** | `~/.local/bin/wtp` | Interactive terminal UI and `--json` CLI |
-| **Desktop Entry** | `~/.local/share/applications/dev.whattheport.WhatThePort.desktop` | Adds **WhatThePort** to your desktop application launcher |
-| **Autostart Entry** | `~/.config/autostart/whattheport-tray.desktop` | Automatically starts the top-bar tray icon when you log in |
+Launch **WhatThePort** from the app grid to start it again after quitting, or turn on **Settings → Launch at login**.
 
-> **Note:** Ensure `~/.local/bin` is in your shell's `PATH`:
-> ```bash
-> export PATH="$HOME/.local/bin:$PATH"
-> ```
-
----
-
-## Usage
-
-### Desktop GUI & Top-Bar Tray
-- **Top-Bar Indicator**: Click the WhatThePort server icon in your top bar to see active ports and total RAM, click any server to open `http://localhost:<port>` in your default browser, or click **Open Full Dashboard…**.
-- **Dashboard Window**: Run `whattheport` from a terminal or launch **WhatThePort** from your desktop app launcher (GNOME Activities / Rofi / Ulauncher).
-- **Stop / Restart**: Click the stop button (`■`) on any row to gracefully `SIGTERM` the entire process tree (escalating to `SIGKILL` after 3 seconds if any child process hangs), or open a server's detail view and click `↻` to restart it in-place.
-
-### Terminal UI (`wtp`)
-Run `wtp` in any terminal:
-
-```bash
-wtp
-```
-
-| Key | Action |
-| :--- | :--- |
-| <kbd>↑</kbd> / <kbd>↓</kbd> or <kbd>j</kbd> / <kbd>k</kbd> | Navigate server list |
-| <kbd>Enter</kbd> | Toggle server detail & process tree view |
-| <kbd>o</kbd> | Open selected server (`http://localhost:PORT`) in default browser |
-| <kbd>x</kbd> | Stop selected server (or all checked servers in Clean Up mode) |
-| <kbd>c</kbd> | Enter / exit **Clean Up** multi-select mode |
-| <kbd>Space</kbd> | Toggle server selection in Clean Up mode |
-| <kbd>q</kbd> / <kbd>Esc</kbd> | Back / Quit |
-
-### JSON CLI (`wtp --json`)
-Query active dev servers programmatically for scripts, Waybar, Polybar, or AI agents:
-
-```bash
-wtp --json
-```
-
-```json
-[
-  {
-    "port": 3000,
-    "name": "web-dashboard",
-    "pid": 48210,
-    "root_pid": 48192,
-    "command": "next dev --turbopack -p 3000",
-    "cwd": "/home/user/projects/web-dashboard",
-    "cwd_exists": true,
-    "branch": "feat/auth",
-    "agent": "Fix OAuth callback",
-    "uptime_seconds": 2541.2,
-    "memory_bytes": 671088640,
-    "cpu_percent": 6.2,
-    "attention": false,
-    "leaking": false,
-    "url": "http://localhost:3000"
-  }
-]
-```
-
----
+`./install.sh --uninstall` removes everything except your settings.
 
 ## Configuration
 
-Settings can be configured via the **⚙ Settings** button in the GUI or by editing `~/.config/whattheport/config.json`:
+Most options are in the menu's **Settings** submenu. Everything lives in `~/.config/whattheport/config.json` (the same file as the Python version, so existing settings carry over):
 
 | Key | Default | Description |
 | :--- | :--- | :--- |
-| `min_port` | `3000` | Lowest TCP port to scan |
-| `max_port` | `65535` | Highest TCP port to scan |
-| `scan_interval` | `2.0` | Seconds between process & socket scans |
-| `threshold_gb` | `2.0` | Memory alert threshold in GB |
-| `leak_warnings` | `true` | Send desktop notification on high memory or `>500 MB` growth in 10m |
-| `cleanup_mode` | `"ask"` | `"off"`, `"ask"` (notify & badge), or `"automatic"` (auto-stop idle/deleted worktree servers) |
-| `cleanup_deleted_worktree` | `true` | Flag servers whose working directory / git worktree was deleted |
-| `cleanup_idle_hours` | `4` | Hours of zero connections and `<2%` CPU before flagging as idle |
-| `cleanup_running_days` | `3` | Days of continuous uptime before suggesting cleanup |
-| `link_claude` | `true` | Resolve Claude Code session titles from `~/.claude/projects` |
-| `link_codex` | `true` | Resolve Codex session titles from `~/.codex/sessions` |
-| `show_branches` | `true` | Display current git branch or commit SHA |
-| `vercel_previews` | `false` | Query `gh api` for Vercel preview deployments on the active branch |
-| `github_pull_requests` | `false` | Query `gh pr list` for open/merged PRs on the active branch |
+| `min_port` / `max_port` | `3000` / `65535` | Port range to watch |
+| `scan_interval` | `2.0` | Seconds between scans |
+| `threshold_gb` | `2.0` | Memory alert threshold |
+| `leak_warnings` | `true` | Notify on high memory or >500 MB growth in 10 minutes |
+| `snooze_minutes` | `60` | Minimum time between repeat alerts for one server |
+| `cleanup_mode` | `"ask"` | `"off"`, `"ask"` (notify) or `"automatic"` (stop) |
+| `cleanup_idle_hours` | `4` | Hours with no connections and under 2% CPU before a server counts as idle |
+| `cleanup_running_days` | `3` | Days of uptime before suggesting cleanup |
+| `cleanup_deleted_worktree` | `true` | Suggest stopping servers whose folder was deleted |
+| `force_quit_seconds` | `3.0` | Grace period before SIGKILL |
+| `allowlist` / `protected_processes` | `[]` | Extra process names to treat as servers / never stop |
+| `link_claude` / `link_codex` | `true` | Show agent session titles |
+| `show_branches` | `true` | Show the git branch |
+| `github_pull_requests` / `vercel_previews` | `false` | Look up PRs and previews with `gh` |
+| `tray` | `"auto"` | `"auto"` (tray everywhere except GNOME), `"on"` or `"off"` |
 
----
-
-## Architecture
+## How it works
 
 ```mermaid
 flowchart LR
-    subgraph Linux Kernel & CLI
-        PROC["/proc/&lt;pid&gt;/stat, statm, cwd, environ"]
-        SS["ss -ltnpH / ss -tnH"]
-        GH["gh CLI (Optional)"]
-    end
-
-    subgraph Engine ["whattheport.engine"]
-        SCAN["SocketScanner & ProcessInspector"]
-        TREE["ProcessTree & ScanEngine"]
-        META["ProjectResolver & AgentSessionResolver"]
-        MON["ServerMonitor & ProcessControl"]
-    end
-
-    subgraph Frontends
-        GUI["GTK 4 + libadwaita App (whattheport)"]
-        TRAY["SNI + Dbusmenu Daemon (whattheport-tray)"]
-        TUI["Curses TUI & JSON CLI (wtp)"]
-    end
-
-    SS --> SCAN
-    PROC --> SCAN
-    SCAN --> TREE
-    TREE --> META
-    GH -.-> MON
-    META --> MON
-    MON --> GUI
-    MON --> TRAY
-    MON --> TUI
+  Kernel["Kernel: /proc + netlink sock_diag"] --> Daemon["wtp daemon"]
+  Daemon -->|"StateChanged signal (D-Bus)"| Ext["GNOME panel menu"]
+  Daemon --> Tray["Tray menu (KDE/XFCE)"]
+  Daemon --> Cli["wtp CLI / --json"]
+  Ext -->|"Stop / Restart / Open / SetPref"| Daemon
 ```
+
+One background service does all the work. It lists sockets straight from the kernel over netlink (no `ss` subprocesses), reads `/proc` once per scan, and only looks at command lines, environments and folders for processes that own a listening port. Each scan builds a ready-to-display view model and publishes it on the session bus as `dev.whattheport.WhatThePort` (`/dev/whattheport/Daemon`, interface `dev.whattheport.Daemon1`) only when something changed. The panel menu, tray and CLI just render it. A scan takes about 12 ms of CPU every 2 seconds, and the service uses about 6 MB of memory.
 
 ```text
-whattheport-linux/
-├── assets/                          # SVG UI screenshots & terminal previews
-├── whattheport/
-│   ├── engine/
-│   │   ├── scanner.py               # TCP listening socket & inbound connection scanner (ss)
-│   │   ├── procs.py                 # Direct /proc/<pid> RSS, CPU ticks, cmdline & environ reader
-│   │   ├── tree.py                  # Process tree & shared socket ownership resolver
-│   │   ├── project.py               # Manifest parser (Node, Python, Rust, Go, Ruby) & git worktrees
-│   │   ├── agents.py                # Claude Code & Codex session transcript resolver
-│   │   ├── github.py                # Asynchronous GitHub PR & Vercel preview lookup via gh
-│   │   ├── scanner_engine.py        # 10-minute rolling history & CPU/memory delta engine
-│   │   ├── monitor.py               # Background polling loop, alerts & cleanup recommendations
-│   │   ├── control.py               # Safe SIGTERM -> SIGKILL tree termination & in-place restart
-│   │   ├── prefs.py                 # User preferences (~/.config/whattheport/config.json)
-│   │   └── format.py                # Port color palette & human-readable byte/duration formatters
-│   ├── gui/
-│   │   ├── app.py                   # GTK 4 / libadwaita single-instance application
-│   │   ├── popover.py               # Main dashboard window, segmented memory bar & cleanup mode
-│   │   ├── server_row.py            # Server list item with inline sparkline & amber badges
-│   │   ├── detail.py                # 10-min charts, process hierarchy & browser/PR actions
-│   │   ├── charts.py                # Custom Cairo DrawingArea widgets (MemoryBar, Sparkline, DetailChart)
-│   │   ├── settings.py              # Adw.PreferencesWindow configuration dialog
-│   │   ├── style.css                # Dark popover stylesheet
-│   │   └── tray_status_notifier.py  # FreeDesktop StatusNotifierItem + com.canonical.dbusmenu service
-│   └── tui/
-│       └── wtp.py                   # Curses interactive terminal UI & --json CLI
-├── tests/                           # Unit & smoke test suite
-├── install.sh                       # Desktop & CLI installer script
-└── pyproject.toml                   # Standard Python package metadata
+src/
+├── lib.rs        # scanner library (wtp_core)
+├── sockets.rs    # netlink sock_diag listing, socket inode → PID, docker-proxy
+├── procfs.rs     # /proc readers: stat, statm, cmdline, environ, cwd, meminfo
+├── tree.rs       # process tree and shared-socket service grouping
+├── scan.rs       # dev server detection, CPU deltas, 10-minute history
+├── project.rs    # manifests, git branches and worktrees
+├── agents.rs     # Claude Code and Codex session titles
+├── model.rs      # Server model, attention and cleanup rules
+├── control.rs    # stop (SIGTERM → SIGKILL), restart, open
+├── github.rs     # PR / Vercel preview lookups via gh
+├── prefs.rs      # ~/.config/whattheport/config.json
+├── rules.rs      # built-in process heuristics
+├── format.rs     # sizes, durations, colours
+├── main.rs       # wtp command line
+├── daemon.rs     # background service, D-Bus interface, alerts, cleanup
+├── view.rs       # view model sent to every frontend
+├── notify.rs     # desktop notifications with actions
+├── tray.rs       # StatusNotifier tray menu
+└── cli.rs        # terminal output and commands
+gnome-extension/whattheport@local/   # panel icon and menu (GJS)
 ```
 
----
-
-## Uninstallation
-
-To remove WhatThePort from your system:
+## Building
 
 ```bash
-pkill -f "whattheport" || true
-rm -rf ~/.local/share/whattheport \
-       ~/.local/bin/whattheport \
-       ~/.local/bin/whattheport-tray \
-       ~/.local/bin/wtp \
-       ~/.local/share/applications/dev.whattheport.WhatThePort.desktop \
-       ~/.config/autostart/whattheport-tray.desktop
+cargo build --release   # target/release/wtp
+cargo test
 ```
-
----
 
 ## Credits & License
 

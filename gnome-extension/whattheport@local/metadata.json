@@ -1,6 +1,6 @@
 {
   "name": "WhatThePort",
-  "description": "Dev servers in your top bar — ports, memory, git branches, and cleanup",
+  "description": "Dev servers in your top bar: ports, memory, git branches and cleanup. Requires the wtp service.",
   "uuid": "whattheport@local",
   "shell-version": [
     "45",
@@ -10,5 +10,6 @@
     "49",
     "50"
   ],
-  "url": "https://whattheport.dev"
+  "version-name": "0.2.0",
+  "url": "https://github.com/devgg003/whattheport-linux"
 }

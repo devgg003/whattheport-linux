@@ -1,274 +1,416 @@
 import Clutter from 'gi://Clutter';
-import GObject from 'gi://GObject';
-import St from 'gi://St';
-import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
+import GLib from 'gi://GLib';
+import GObject from 'gi://GObject';
+import Pango from 'gi://Pango';
+import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
-import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
+import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
-const WhatThePortIndicator = GObject.registerClass(
-class WhatThePortIndicator extends PanelMenu.Button {
-    _init() {
-        super._init(0.0, 'WhatThePort Indicator');
+const BUS_NAME = 'dev.whattheport.WhatThePort';
+const OBJECT_PATH = '/dev/whattheport/Daemon';
+const IFACE = 'dev.whattheport.Daemon1';
 
-        this._box = new St.BoxLayout({
-            style_class: 'panel-status-indicators-box wtp-indicator-box'
+const BAR_WIDTH = 320;
+const THRESHOLDS = [1, 2, 4, 8];
+const CLEANUP_MODES = [['off', 'Off'], ['ask', 'Ask first'], ['automatic', 'Automatic']];
+const TOGGLES = [
+    ['leak_warnings', 'Memory and leak alerts'],
+    ['show_branches', 'Show git branches'],
+    ['link_claude', 'Link Claude Code sessions'],
+    ['link_codex', 'Link Codex sessions'],
+    ['github_pull_requests', 'Look up GitHub pull requests'],
+    ['vercel_previews', 'Look up Vercel previews'],
+    ['launch_at_login', 'Launch at login'],
+];
+
+function call(method, params = null, onReply = null) {
+    Gio.DBus.session.call(
+        BUS_NAME, OBJECT_PATH, IFACE, method, params, null,
+        Gio.DBusCallFlags.NO_AUTO_START, 5000, null,
+        (conn, res) => {
+            try {
+                const reply = conn.call_finish(res);
+                onReply?.(reply);
+            } catch (e) {
+                console.warn(`WhatThePort: ${method} failed: ${e.message}`);
+            }
         });
+}
 
-        // Dot grid icon (⠿)
-        this._iconLabel = new St.Label({
-            text: '⠿',
-            style_class: 'wtp-dotgrid',
-            y_align: Clutter.ActorAlign.CENTER
+const portCall = (method, port) => call(method, new GLib.Variant('(u)', [port]));
+const setPref = (key, value) =>
+    call('SetPref', new GLib.Variant('(ss)', [key, JSON.stringify(value)]));
+
+// St.BoxLayout gained `orientation` in GNOME 48 and deprecated `vertical`.
+function box(vertical, params = {}) {
+    const b = new St.BoxLayout(params);
+    if ('orientation' in b)
+        b.orientation = vertical ? Clutter.Orientation.VERTICAL : Clutter.Orientation.HORIZONTAL;
+    else
+        b.vertical = vertical;
+    return b;
+}
+
+function label(text, style, params = {}) {
+    const l = new St.Label({text: text ?? '', style_class: style, y_align: Clutter.ActorAlign.CENTER, ...params});
+    l.clutter_text.ellipsize = Pango.EllipsizeMode.END;
+    return l;
+}
+
+function hexToRgb(hex) {
+    const n = parseInt((hex || '#6EC7ED').slice(1), 16);
+    return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255];
+}
+
+function iconButton(iconName, style, accessibleName, onClick) {
+    const b = new St.Button({
+        style_class: `wtp-icon-button ${style}`,
+        child: new St.Icon({icon_name: iconName, icon_size: 14}),
+        can_focus: true,
+        track_hover: true,
+        y_align: Clutter.ActorAlign.CENTER,
+        accessible_name: accessibleName,
+    });
+    b.connect('clicked', onClick);
+    return b;
+}
+
+function textButton(text, style, onClick) {
+    const b = new St.Button({label: text, style_class: `wtp-text-button ${style}`, can_focus: true});
+    b.connect('clicked', onClick);
+    return b;
+}
+
+/** One server: a compact header row that expands in place into details and actions. */
+const ServerRow = GObject.registerClass(
+class ServerRow extends PopupMenu.PopupSubMenuMenuItem {
+    _init(indicator) {
+        super._init('', false);
+        this._indicator = indicator;
+        this.add_style_class_name('wtp-server-item');
+        this.label.hide();
+        const expander = this.label.get_next_sibling();
+        if (expander)
+            expander.x_expand = false;
+
+        this._port = label('', 'wtp-row-port');
+        this._name = label('', 'wtp-row-name');
+        this._subtitle = label('', 'wtp-row-sub');
+        const text = box(true, {x_expand: true, style_class: 'wtp-row-text'});
+        text.add_child(this._name);
+        text.add_child(this._subtitle);
+
+        this._spark = new St.DrawingArea({style_class: 'wtp-spark', y_align: Clutter.ActorAlign.CENTER});
+        this._spark.connect('repaint', area => this._drawSpark(area));
+        this._memory = label('', 'wtp-row-mem', {x_align: Clutter.ActorAlign.END});
+
+        this._open = iconButton('web-browser-symbolic', 'wtp-open-button', 'Open in browser', () => {
+            this._indicator.menu.close();
+            call('Open', new GLib.Variant('(us)', [this.s.port, 'local']));
         });
-        this._box.add_child(this._iconLabel);
+        this._stop = iconButton('media-playback-stop-symbolic', 'wtp-stop-button', 'Stop server',
+            () => portCall('Stop', this.s.port));
 
-        // Active server count label
-        this._countLabel = new St.Label({
-            text: '',
-            style_class: 'wtp-count-label',
-            y_align: Clutter.ActorAlign.CENTER
-        });
-        this._box.add_child(this._countLabel);
+        const row = box(false, {x_expand: true, style_class: 'wtp-row'});
+        for (const child of [this._port, text, this._spark, this._memory, this._open, this._stop])
+            row.add_child(child);
+        this.insert_child_above(row, this.label);
 
-        this.add_child(this._box);
+        this._details = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false, style_class: 'wtp-details-item'});
+        this._detailsBox = box(true, {x_expand: true, style_class: 'wtp-details'});
+        this._details.add_child(this._detailsBox);
+        this.menu.addMenuItem(this._details);
 
-        this.setMenu(new PopupMenu.PopupMenu(this, 0.0, St.Side.TOP));
-
-        // GNOME Shell 50 click gesture support
-        if (this._clickGesture) {
-            this.remove_action(this._clickGesture);
-        }
-        this._clickGesture = new Clutter.ClickGesture();
-        this._clickGesture.set_recognize_on_press(true);
-        this._clickGesture.set_enabled(true);
-        this._clickGesture.connect('recognize', () => {
-            this._updateStatus();
-            this.menu.toggle();
-        });
-        this.add_action(this._clickGesture);
-
-        this._serversData = [];
-        this._buildMenu();
-        this._updateStatus();
-        this._startPolling();
+        this._actions = new PopupMenu.PopupBaseMenuItem({activate: false, hover: false, can_focus: false, style_class: 'wtp-actions-item'});
+        this._actionsBox = box(false, {x_expand: true, style_class: 'wtp-actions'});
+        this._actions.add_child(this._actionsBox);
+        this.menu.addMenuItem(this._actions);
     }
 
-    vfunc_event(event) {
-        if (this.menu &&
-            (event.type() === Clutter.EventType.TOUCH_BEGIN ||
-             event.type() === Clutter.EventType.BUTTON_PRESS)
-        ) {
-            this._updateStatus();
-            this.menu.toggle();
-            return Clutter.EVENT_STOP;
+    activate(event) {
+        // The row's click gesture also sees clicks on its own buttons.
+        if (this._open.hover || this._stop.hover)
+            return;
+        super.activate(event);
+    }
+
+    update(s) {
+        const prev = this.s;
+        this.s = s;
+        this._port.text = `:${s.port}`;
+        this._port.set_style(`color: ${s.color};`);
+        this._name.text = s.name;
+        this._subtitle.text = s.cleanup ? `${s.subtitle} · ${s.cleanup}` : s.subtitle;
+        this._memory.text = s.memory;
+        this._memory.style_class = s.attention ? 'wtp-row-mem wtp-alert' : 'wtp-row-mem';
+        this._stop.visible = !s.protected;
+        this._spark.queue_repaint();
+
+        const detailKey = JSON.stringify([s.framework, s.agent, s.branch, s.uptime, s.connections, s.command,
+            s.directory, s.cpu, s.growth, s.cleanup, s.processes]);
+        if (!prev || detailKey !== this._detailKey) {
+            this._detailKey = detailKey;
+            this._renderDetails(s);
         }
-        return Clutter.EVENT_PROPAGATE;
+        const actionKey = JSON.stringify([s.can_restart, s.protected, s.attention, s.snoozed, s.pull_request, s.preview]);
+        if (!prev || actionKey !== this._actionKey) {
+            this._actionKey = actionKey;
+            this._renderActions(s);
+        }
+    }
+
+    _renderDetails(s) {
+        this._detailsBox.destroy_all_children();
+        const line = (key, value, style = '') => {
+            if (!value)
+                return;
+            const l = box(false, {style_class: 'wtp-detail-line'});
+            l.add_child(label(key, 'wtp-detail-key'));
+            l.add_child(label(value, `wtp-detail-value ${style}`, {x_expand: true}));
+            this._detailsBox.add_child(l);
+        };
+        line('Framework', s.framework);
+        line('Session', s.agent);
+        line('Branch', s.branch);
+        line('Uptime', `${s.uptime}${s.connections ? ` · ${s.connections} connection${s.connections === 1 ? '' : 's'}` : ''}`);
+        line('Command', s.command, 'wtp-mono');
+        line('Folder', s.directory, 'wtp-mono');
+        line('CPU', `${s.cpu}${s.growth ? ` · ${s.growth}` : ''}`);
+        line('Clean up', s.cleanup, 'wtp-alert');
+
+        if (s.processes.length > 1) {
+            this._detailsBox.add_child(label(`Processes (${s.processes.length})`, 'wtp-detail-heading'));
+            for (const p of s.processes) {
+                const l = box(false, {style_class: 'wtp-proc-line'});
+                l.add_child(label(`${'  '.repeat(p.depth)}${p.name}`, 'wtp-proc-name wtp-mono', {x_expand: true}));
+                l.add_child(label(`${p.memory} · ${p.cpu}`, 'wtp-proc-stats wtp-mono'));
+                this._detailsBox.add_child(l);
+            }
+        }
+    }
+
+    _renderActions(s) {
+        this._actionsBox.destroy_all_children();
+        const add = (text, onClick, style = '') => this._actionsBox.add_child(textButton(text, style, onClick));
+        const open = kind => () => {
+            this._indicator.menu.close();
+            call('Open', new GLib.Variant('(us)', [s.port, kind]));
+        };
+        add('Open', open('local'));
+        if (s.pull_request)
+            add(`PR #${s.pull_request.number}`, open('pr'));
+        if (s.preview)
+            add(`Preview (${s.preview.state})`, open('preview'));
+        if (s.can_restart)
+            add('Restart', () => portCall('Restart', s.port));
+        if (s.attention && !s.snoozed)
+            add('Mute alerts', () => portCall('Snooze', s.port));
+        if (!s.protected)
+            add('Stop', () => portCall('Stop', s.port), 'wtp-danger');
+    }
+
+    _drawSpark(area) {
+        const cr = area.get_context();
+        const [w, h] = area.get_surface_size();
+        const pts = this.s?.spark ?? [];
+        if (pts.length >= 2) {
+            const [r, g, b] = hexToRgb(this.s.color);
+            cr.setLineWidth(1.5);
+            cr.setSourceRGBA(r, g, b, 0.95);
+            pts.forEach((v, i) => {
+                const x = 1 + i / (pts.length - 1) * (w - 2);
+                const y = h - 1.5 - v * (h - 3);
+                if (i === 0)
+                    cr.moveTo(x, y);
+                else
+                    cr.lineTo(x, y);
+            });
+            cr.stroke();
+        }
+        cr.$dispose();
+    }
+});
+
+const Indicator = GObject.registerClass(
+class Indicator extends PanelMenu.Button {
+    _init(extensionPath) {
+        super._init(0.5, 'WhatThePort');
+        this.menu.actor.add_style_class_name('wtp-menu');
+
+        const panelBox = box(false, {style_class: 'panel-status-indicators-box wtp-panel'});
+        this._icon = new St.Icon({
+            gicon: Gio.icon_new_for_string(`${extensionPath}/icons/whattheport-symbolic.svg`),
+            style_class: 'system-status-icon wtp-panel-icon',
+        });
+        this._count = label('', 'wtp-panel-count');
+        panelBox.add_child(this._icon);
+        panelBox.add_child(this._count);
+        this.add_child(panelBox);
+
+        this._buildMenu();
+        this._rows = new Map();
+
+        this._signalId = Gio.DBus.session.signal_subscribe(
+            BUS_NAME, IFACE, 'StateChanged', OBJECT_PATH, null, Gio.DBusSignalFlags.NONE,
+            (_c, _s, _p, _i, _n, params) => this._apply(params.deep_unpack()[0]));
+        call('GetState', null, reply => this._apply(reply.deep_unpack()[0]));
     }
 
     _buildMenu() {
-        this.menu.removeAll();
-
-        // Header Item
-        let headerItem = new PopupMenu.PopupBaseMenuItem({
-            reactive: false,
-            can_focus: false,
-            style_class: 'wtp-popup-content'
-        });
-
-        let headerBox = new St.BoxLayout({
-            vertical: true,
-            x_expand: true
-        });
-
-        let titleLabel = new St.Label({
-            text: 'WHATTHEPORT',
-            style_class: 'wtp-popup-title'
-        });
-        headerBox.add_child(titleLabel);
-
-        this._memTotalLabel = new St.Label({
-            text: '0 MB',
-            style_class: 'wtp-popup-mem'
-        });
-        headerBox.add_child(this._memTotalLabel);
-
-        this._subSummaryLabel = new St.Label({
-            text: 'No active dev servers',
-            style_class: 'wtp-popup-servers'
-        });
-        headerBox.add_child(this._subSummaryLabel);
-
-        headerItem.add_child(headerBox);
-        this.menu.addMenuItem(headerItem);
-
-        // Separator
+        // Memory summary: headline, segmented bar coloured by port, legend.
+        const summary = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false, style_class: 'wtp-summary-item'});
+        const summaryBox = box(true, {x_expand: true, style_class: 'wtp-summary'});
+        const head = box(false, {style_class: 'wtp-summary-head'});
+        this._total = label('', 'wtp-summary-total');
+        this._totalCaption = label('', 'wtp-summary-caption', {x_expand: true});
+        this._cpu = label('', 'wtp-summary-caption');
+        head.add_child(this._total);
+        head.add_child(this._totalCaption);
+        head.add_child(this._cpu);
+        this._bar = box(false, {style_class: 'wtp-membar', width: BAR_WIDTH});
+        this._legend = label('', 'wtp-summary-legend');
+        summaryBox.add_child(head);
+        summaryBox.add_child(this._bar);
+        summaryBox.add_child(this._legend);
+        summary.add_child(summaryBox);
+        this.menu.addMenuItem(summary);
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
-        // Dynamic server items container
-        this._serverItemsSection = new PopupMenu.PopupMenuSection();
-        this.menu.addMenuItem(this._serverItemsSection);
+        this._serverSection = new PopupMenu.PopupMenuSection();
+        this.menu.addMenuItem(this._serverSection);
+        this._empty = new PopupMenu.PopupMenuItem('No dev servers listening', {reactive: false, can_focus: false});
+        this._empty.label.add_style_class_name('wtp-dim');
+        this.menu.addMenuItem(this._empty);
+        this._retiredSection = new PopupMenu.PopupMenuSection();
+        this.menu.addMenuItem(this._retiredSection);
 
-        // Separator before actions
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        this._cleanup = new PopupMenu.PopupImageMenuItem('', 'edit-clear-all-symbolic');
+        this._cleanup.connect('activate', () => call('CleanUp'));
+        this.menu.addMenuItem(this._cleanup);
 
-        // Bottom action items
-        let openAppItem = new PopupMenu.PopupMenuItem('Open Full Dashboard…');
-        openAppItem.connect('activate', () => {
-            try {
-                let home = GLib.get_home_dir();
-                Gio.Subprocess.new([`${home}/.local/bin/whattheport`], Gio.SubprocessFlags.NONE);
-            } catch (e) {
-                console.error(`WhatThePort launch error: ${e}`);
-            }
+        this._settings = new PopupMenu.PopupSubMenuMenuItem('Settings', true);
+        this._settings.icon.icon_name = 'emblem-system-symbolic';
+        const heading = text => {
+            const item = new PopupMenu.PopupMenuItem(text, {reactive: false, can_focus: false});
+            item.label.add_style_class_name('wtp-section-heading');
+            this._settings.menu.addMenuItem(item);
+        };
+        heading('Memory alert above');
+        this._thresholdItems = THRESHOLDS.map(gb => {
+            const item = new PopupMenu.PopupMenuItem(`${gb} GB`);
+            item.connect('activate', () => setPref('threshold_gb', gb));
+            this._settings.menu.addMenuItem(item);
+            return [gb, item];
         });
-        this.menu.addMenuItem(openAppItem);
+        heading('Clean up idle servers');
+        this._cleanupItems = CLEANUP_MODES.map(([mode, text]) => {
+            const item = new PopupMenu.PopupMenuItem(text);
+            item.connect('activate', () => setPref('cleanup_mode', mode));
+            this._settings.menu.addMenuItem(item);
+            return [mode, item];
+        });
+        this._settings.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        this._toggles = TOGGLES.map(([key, text]) => {
+            const item = new PopupMenu.PopupSwitchMenuItem(text, false);
+            item.connect('toggled', (_item, state) => setPref(key, state));
+            this._settings.menu.addMenuItem(item);
+            return [key, item];
+        });
+        this.menu.addMenuItem(this._settings);
+
+        const quit = new PopupMenu.PopupImageMenuItem('Quit WhatThePort', 'application-exit-symbolic');
+        quit.connect('activate', () => call('Quit'));
+        this.menu.addMenuItem(quit);
     }
 
-    _updateStatus() {
+    _apply(json) {
+        let state;
         try {
-            let home = GLib.get_home_dir();
-            let proc = Gio.Subprocess.new(
-                [`${home}/.local/bin/wtp`, '--json'],
-                Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE
-            );
-            let [, out] = proc.communicate_utf8(null, null);
-            if (proc.get_successful() && out) {
-                let data = JSON.parse(out);
-                this._serversData = data;
-
-                let count = data.length;
-                let attention = data.some(s => s.attention || s.leaking);
-
-                if (count > 0) {
-                    this._countLabel.set_text(`${count}`);
-                    this._countLabel.show();
-                } else {
-                    this._countLabel.hide();
-                }
-
-                if (attention) {
-                    this._iconLabel.style_class = 'wtp-dotgrid-amber';
-                } else {
-                    this._iconLabel.style_class = 'wtp-dotgrid';
-                }
-
-                this._renderMenuItems(data);
-            }
+            state = JSON.parse(json);
         } catch (e) {
-            console.error(`WhatThePort status error: ${e}`);
-        }
-    }
-
-    _renderMenuItems(data) {
-        let totalMemBytes = data.reduce((acc, s) => acc + (s.memory_bytes || 0), 0);
-        let mb = totalMemBytes / (1024 * 1024);
-        let memStr = mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${Math.round(mb)} MB`;
-        this._memTotalLabel.set_text(memStr);
-
-        let count = data.length;
-        if (count === 0) {
-            this._subSummaryLabel.set_text('No active dev servers');
-        } else if (count === 1) {
-            this._subSummaryLabel.set_text('1 active server');
-        } else {
-            this._subSummaryLabel.set_text(`${count} active servers`);
-        }
-
-        this._serverItemsSection.removeAll();
-
-        if (count === 0) {
-            let emptyItem = new PopupMenu.PopupBaseMenuItem({ reactive: false, can_focus: false });
-            emptyItem.add_child(new St.Label({ text: 'No servers listening on dev ports', style_class: 'wtp-row-sub' }));
-            this._serverItemsSection.addMenuItem(emptyItem);
             return;
         }
+        this._count.text = state.count > 0 ? `${state.count}` : '';
+        this._count.visible = state.count > 0;
+        if (state.attention)
+            this._icon.add_style_class_name('wtp-alert');
+        else
+            this._icon.remove_style_class_name('wtp-alert');
 
-        for (let s of data) {
-            let item = new PopupMenu.PopupBaseMenuItem({
-                reactive: true,
-                can_focus: true
-            });
+        this._applySummary(state.summary, state.count);
+        this._applyServers(state.servers);
 
-            let rowBox = new St.BoxLayout({
-                spacing: 8,
-                x_expand: true,
-                y_align: Clutter.ActorAlign.CENTER
-            });
+        this._retiredSection.removeAll();
+        for (const r of state.retired) {
+            const item = new PopupMenu.PopupMenuItem(`:${r.port}  ${r.name}  —  ${r.state}…`, {reactive: false, can_focus: false});
+            item.label.add_style_class_name('wtp-dim');
+            this._retiredSection.addMenuItem(item);
+        }
+        this._empty.visible = state.servers.length === 0 && state.retired.length === 0;
 
-            // Port label
-            let portLbl = new St.Label({
-                text: `:${s.port}`,
-                style_class: 'wtp-row-port',
-                y_align: Clutter.ActorAlign.CENTER
-            });
-            rowBox.add_child(portLbl);
+        this._cleanup.visible = !!state.cleanup;
+        if (state.cleanup)
+            this._cleanup.label.text = state.cleanup.label;
 
-            // Center details
-            let infoBox = new St.BoxLayout({
-                vertical: true,
-                x_expand: true
-            });
-
-            let nameLbl = new St.Label({
-                text: s.name || 'Unknown',
-                style_class: 'wtp-row-name'
-            });
-            infoBox.add_child(nameLbl);
-
-            let subParts = [];
-            if (s.agent) subParts.push(`✴ ${s.agent}`);
-            else if (s.branch) subParts.push(s.branch);
-            let mins = Math.max(1, Math.round((s.uptime_seconds || 0) / 60));
-            subParts.push(mins >= 60 ? `${Math.floor(mins / 60)}h` : `${mins}m`);
-
-            let subLbl = new St.Label({
-                text: subParts.join(' · '),
-                style_class: 'wtp-row-sub'
-            });
-            infoBox.add_child(subLbl);
-            rowBox.add_child(infoBox);
-
-            // Memory label on right
-            let sMb = (s.memory_bytes || 0) / (1024 * 1024);
-            let sMemStr = sMb >= 1024 ? `${(sMb / 1024).toFixed(1)} GB` : `${Math.round(sMb)} MB`;
-            let memLbl = new St.Label({
-                text: sMemStr,
-                style_class: 'wtp-row-mem',
-                y_align: Clutter.ActorAlign.CENTER
-            });
-            rowBox.add_child(memLbl);
-
-            item.add_child(rowBox);
-
-            // Clicking opens in browser
-            item.connect('activate', () => {
-                if (s.url && (s.url.startsWith('http://') || s.url.startsWith('https://'))) {
-                    try {
-                        Gio.AppInfo.launch_default_for_uri(s.url, null);
-                    } catch (e) {
-                        console.error(`Failed to open ${s.url}: ${e}`);
-                    }
-                }
-            });
-
-            this._serverItemsSection.addMenuItem(item);
+        const p = state.prefs;
+        for (const [gb, item] of this._thresholdItems)
+            item.setOrnament(gb === p.threshold_gb ? PopupMenu.Ornament.CHECK : PopupMenu.Ornament.NONE);
+        for (const [mode, item] of this._cleanupItems)
+            item.setOrnament(mode === p.cleanup_mode ? PopupMenu.Ornament.CHECK : PopupMenu.Ornament.NONE);
+        for (const [key, item] of this._toggles) {
+            if (item.state !== p[key])
+                item.setToggleState(p[key]);
         }
     }
 
-    _startPolling() {
-        this._timeoutId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 2, () => {
-            this._updateStatus();
-            return GLib.SOURCE_CONTINUE;
-        });
+    _applySummary(sum, count) {
+        this._total.text = sum.servers_memory;
+        this._totalCaption.text = `in ${count} server${count === 1 ? '' : 's'}`;
+        this._cpu.text = `CPU ${sum.cpu}`;
+        this._legend.text = `Other ${sum.other_memory}  ·  Free ${sum.free_memory}`;
+
+        this._bar.destroy_all_children();
+        const segment = (fraction, style, color) => {
+            const width = Math.round(fraction * BAR_WIDTH);
+            if (width < 1)
+                return;
+            const w = new St.Widget({style_class: style, width: Math.max(width, 2), y_expand: true});
+            if (color)
+                w.set_style(`background-color: ${color};`);
+            this._bar.add_child(w);
+        };
+        for (const s of sum.segments)
+            segment(s.fraction, 'wtp-bar-segment', s.color);
+        segment(sum.other_fraction, 'wtp-bar-other');
+    }
+
+    _applyServers(servers) {
+        const keys = servers.map(s => s.key);
+        const sameRows = keys.length === this._rows.size && keys.every(k => this._rows.has(k));
+        if (!sameRows) {
+            // moveMenuItem() leaves a submenu's body behind, so rebuild in order instead.
+            const openKey = [...this._rows].find(([, row]) => row.menu.isOpen)?.[0];
+            this._serverSection.removeAll();
+            this._rows.clear();
+            for (const s of servers) {
+                const row = new ServerRow(this);
+                this._rows.set(s.key, row);
+                this._serverSection.addMenuItem(row);
+            }
+            this._rows.get(openKey)?.menu.open(false);
+        }
+        for (const s of servers)
+            this._rows.get(s.key).update(s);
     }
 
     destroy() {
-        if (this._timeoutId) {
-            GLib.Source.remove(this._timeoutId);
-            this._timeoutId = null;
+        if (this._signalId) {
+            Gio.DBus.session.signal_unsubscribe(this._signalId);
+            this._signalId = 0;
         }
         super.destroy();
     }
@@ -276,14 +418,30 @@ class WhatThePortIndicator extends PanelMenu.Button {
 
 export default class WhatThePortExtension extends Extension {
     enable() {
-        this._indicator = new WhatThePortIndicator();
-        Main.panel.addToStatusArea('whattheport-indicator', this._indicator);
+        // The icon exists only while the wtp service is running; quitting removes it.
+        this._onAppeared = () => this._show();
+        this._onVanished = () => this._hide();
+        this._watchId = Gio.bus_watch_name(Gio.BusType.SESSION, BUS_NAME,
+            Gio.BusNameWatcherFlags.NONE, this._onAppeared, this._onVanished);
     }
 
     disable() {
-        if (this._indicator) {
-            this._indicator.destroy();
-            this._indicator = null;
+        if (this._watchId) {
+            Gio.bus_unwatch_name(this._watchId);
+            this._watchId = 0;
         }
+        this._hide();
+    }
+
+    _show() {
+        if (this._indicator)
+            return;
+        this._indicator = new Indicator(this.path);
+        Main.panel.addToStatusArea(this.uuid, this._indicator);
+    }
+
+    _hide() {
+        this._indicator?.destroy();
+        this._indicator = null;
     }
 }

@@ -18,9 +18,17 @@ A Linux port of [WhatThePort](https://github.com/tomjohndesign/what-the-port): a
 
 ---
 
-## Why
+## Why?
 
-Running several AI coding agents across git worktrees leaves orphaned dev servers holding ports and gigabytes of RAM. WhatThePort finds every local dev server, groups its whole process tree, names the project and branch, links the agent session that started it, and warns you before a leak sends your machine into swap.
+Open a few coding agents against different git worktrees and you end up with a pile of `next dev`,
+`vite`, `uvicorn` and `cargo` processes still running long after you moved on. They sit there holding
+ports and RAM, and nothing tells you where they came from. The usual fix is to find them by hand and
+hope you picked the right PID.
+
+WhatThePort keeps that list in front of you. It shows what is listening on each port, which project
+and branch it belongs to, which agent session started it, how much memory it is using, and whether it
+has gone idle or started leaking. From there you can open it, restart it, or kill the whole process
+tree in one click.
 
 ## Features
 

@@ -22,7 +22,13 @@ async fn call<B>(conn: &zbus::Connection, method: &str, body: &B) -> Result<zbus
 where
     B: serde::Serialize + zbus::zvariant::DynamicType,
 {
-    Ok(conn.call_method(Some(BUS_NAME), OBJECT_PATH, Some(INTERFACE), method, body).await?)
+    conn.call_method(Some(BUS_NAME), OBJECT_PATH, Some(INTERFACE), method, body)
+        .await
+        .map_err(|e| match e {
+            // The daemon's own reason reads better than the D-Bus error name.
+            zbus::Error::MethodError(_, Some(reason), _) => reason.into(),
+            other => other.into(),
+        })
 }
 
 fn local_scan() -> (Prefs, Vec<wtp_core::model::Server>) {

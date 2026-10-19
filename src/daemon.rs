@@ -240,6 +240,21 @@ impl Core {
         true
     }
 
+    /// Why a stop or restart of `port` cannot happen, if it cannot. Shared by the D-Bus
+    /// methods so callers get an error instead of a silent success.
+    fn check_stop(&self, port: u16, restart: bool) -> Result<(), String> {
+        let Some(s) = self.server(port) else {
+            return Err(format!("no dev server on :{port}"));
+        };
+        if s.is_protected {
+            return Err(format!(":{port} is protected ({})", s.process_name));
+        }
+        if restart && !control::can_restart(s) {
+            return Err(format!("don't know how to restart :{port}"));
+        }
+        Ok(())
+    }
+
     fn begin_stop(&mut self, port: u16, restart: bool) -> Option<StopJob> {
         if self.retired.get(&port).is_some_and(|r| r.phase == Phase::Stopping) {
             return None;
@@ -351,12 +366,16 @@ impl Bus {
     }
 
     fn stop(&self, port_: u32) -> zbus::fdo::Result<()> {
-        let _ = self.tx.send(Command::Stop(port(port_)?));
+        let port = port(port_)?;
+        self.core.lock().unwrap().check_stop(port, false).map_err(zbus::fdo::Error::Failed)?;
+        let _ = self.tx.send(Command::Stop(port));
         Ok(())
     }
 
     fn restart(&self, port_: u32) -> zbus::fdo::Result<()> {
-        let _ = self.tx.send(Command::Restart(port(port_)?));
+        let port = port(port_)?;
+        self.core.lock().unwrap().check_stop(port, true).map_err(zbus::fdo::Error::Failed)?;
+        let _ = self.tx.send(Command::Restart(port));
         Ok(())
     }
 
@@ -569,4 +588,16 @@ async fn stop_job(job: StopJob, core: Arc<Mutex<Core>>, wake: Arc<Notify>) {
     };
     core.lock().unwrap().finish_stop(job.port, phase);
     wake.notify_one();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stopping_a_missing_port_is_an_error() {
+        let core = Core::new();
+        assert_eq!(core.check_stop(9, false).unwrap_err(), "no dev server on :9");
+        assert_eq!(core.check_stop(9, true).unwrap_err(), "no dev server on :9");
+    }
 }

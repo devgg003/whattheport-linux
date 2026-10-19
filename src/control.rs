@@ -70,7 +70,8 @@ fn shell_quote(s: &str) -> String {
 }
 
 pub fn can_restart(s: &Server) -> bool {
-    s.launch.as_ref().and_then(shell_command).is_some()
+    !s.is_protected
+        && s.launch.as_ref().and_then(shell_command).is_some()
         && s.launch_directory.as_deref().is_some_and(|d| std::path::Path::new(d).is_dir())
 }
 

@@ -111,7 +111,16 @@ pub fn rss(pid: i32) -> u64 {
 pub fn cwd(pid: i32) -> Option<String> {
     fs::read_link(format!("/proc/{pid}/cwd"))
         .ok()
-        .map(|p| p.to_string_lossy().into_owned())
+        .map(|p| strip_deleted(p.to_string_lossy().into_owned()))
+}
+
+/// The kernel appends " (deleted)" to the target of /proc/<pid>/cwd once the folder is
+/// removed. Drop it so names stay clean, unless a real folder carries that name.
+fn strip_deleted(path: String) -> String {
+    match path.strip_suffix(" (deleted)") {
+        Some(clean) if !std::path::Path::new(&path).is_dir() => clean.to_string(),
+        _ => path,
+    }
 }
 
 fn split_nul(data: &[u8]) -> impl Iterator<Item = &[u8]> {
@@ -202,6 +211,12 @@ mod tests {
         assert_eq!(p.comm, "weird (name)");
         assert_eq!(p.ppid, 7);
         assert_eq!(p.cpu_ticks, 42);
+    }
+
+    #[test]
+    fn strips_deleted_marker_from_cwd() {
+        assert_eq!(strip_deleted("/work/billing-api-invoices (deleted)".into()), "/work/billing-api-invoices");
+        assert_eq!(strip_deleted("/work/billing-api".into()), "/work/billing-api");
     }
 
     #[test]

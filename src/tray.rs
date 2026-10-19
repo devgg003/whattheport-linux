@@ -21,6 +21,30 @@ pub async fn spawn(tx: UnboundedSender<Command>) -> Result<ksni::Handle<Tray>, k
 const THRESHOLDS: &[f64] = &[1.0, 2.0, 4.0, 8.0];
 const CLEANUP_MODES: &[(&str, &str)] = &[("off", "Off"), ("ask", "Ask first"), ("automatic", "Automatic")];
 
+const BLUE: [u8; 3] = [0x6E, 0xC7, 0xED];
+const AMBER: [u8; 3] = [0xFF, 0xB2, 0x24];
+
+/// The 2x3 dot grid from data/icons/whattheport.svg (24 unit canvas, radius 2.2),
+/// rendered with soft edges as ARGB32 in network byte order.
+fn dots_icon(size: i32, [r, g, b]: [u8; 3]) -> ksni::Icon {
+    const CENTERS: [(f32, f32); 6] = [(8.0, 5.0), (16.0, 5.0), (8.0, 12.0), (16.0, 12.0), (8.0, 19.0), (16.0, 19.0)];
+    let scale = size as f32 / 24.0;
+    let radius = 2.2 * scale;
+    let mut data = Vec::with_capacity((size * size * 4) as usize);
+    for y in 0..size {
+        for x in 0..size {
+            let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+            let coverage = CENTERS
+                .iter()
+                .map(|(cx, cy)| radius + 0.5 - ((px - cx * scale).powi(2) + (py - cy * scale).powi(2)).sqrt())
+                .fold(0.0f32, f32::max)
+                .clamp(0.0, 1.0);
+            data.extend_from_slice(&[(coverage * 255.0).round() as u8, r, g, b]);
+        }
+    }
+    ksni::Icon { width: size, height: size, data }
+}
+
 fn info(label: impl Into<String>) -> MenuItem<Tray> {
     StandardItem { label: label.into().replace('_', "__"), enabled: false, ..Default::default() }.into()
 }
@@ -93,8 +117,15 @@ impl ksni::Tray for Tray {
         format!("WhatThePort ({} servers)", self.state.count)
     }
 
+    // The icon is drawn in memory and sent as pixels, so it shows up even when the
+    // theme icons from install.sh are missing. An empty name makes hosts use the pixmap.
     fn icon_name(&self) -> String {
-        if self.state.attention { "whattheport-attention" } else { "whattheport" }.into()
+        String::new()
+    }
+
+    fn icon_pixmap(&self) -> Vec<ksni::Icon> {
+        let color = if self.state.attention { AMBER } else { BLUE };
+        [24, 48].into_iter().map(|size| dots_icon(size, color)).collect()
     }
 
     fn tool_tip(&self) -> ToolTip {
@@ -168,5 +199,19 @@ impl ksni::Tray for Tray {
         items.push(SubMenu { label: "Settings".into(), submenu: settings, ..Default::default() }.into());
         items.push(action("Quit WhatThePort", Command::Quit));
         items
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn icon_is_drawn_without_installed_files() {
+        let icon = dots_icon(24, AMBER);
+        assert_eq!((icon.width, icon.height, icon.data.len()), (24, 24, 24 * 24 * 4));
+        let pixel = |x: usize, y: usize| &icon.data[(y * 24 + x) * 4..][..4];
+        assert_eq!(pixel(8, 5), [255, 0xFF, 0xB2, 0x24], "dot centre is opaque amber");
+        assert_eq!(pixel(0, 0)[0], 0, "corner is transparent");
     }
 }

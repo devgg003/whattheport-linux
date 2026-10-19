@@ -32,6 +32,10 @@ pub struct Summary {
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct Segment {
+    pub port: u16,
+    pub name: String,
+    pub memory: String,
+    pub percent: String,
     pub color: String,
     pub fraction: f64,
 }
@@ -154,7 +158,17 @@ pub fn build(i: Inputs) -> State {
             cpu: format::percent(server_cpu / wtp_core::procfs::cpu_count()),
             segments: active
                 .iter()
-                .map(|s| Segment { color: color(s.port), fraction: s.memory as f64 / total as f64 })
+                .map(|s| {
+                    let fraction = s.memory as f64 / total as f64;
+                    Segment {
+                        port: s.port,
+                        name: s.display_name(),
+                        memory: format::bytes(s.memory),
+                        percent: format::percent(fraction * 100.0),
+                        color: color(s.port),
+                        fraction,
+                    }
+                })
                 .collect(),
             other_fraction: other as f64 / total as f64,
         },

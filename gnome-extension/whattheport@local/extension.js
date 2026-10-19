@@ -260,8 +260,8 @@ class Indicator extends PanelMenu.Button {
     }
 
     _buildMenu() {
-        // Memory summary: headline, segmented bar coloured by port, legend.
-        const summary = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false, style_class: 'wtp-summary-item'});
+        // Memory summary: headline, segmented bar coloured by port, legend + hover breakdown.
+        const summary = new PopupMenu.PopupBaseMenuItem({activate: false, hover: false, can_focus: false, style_class: 'wtp-summary-item'});
         const summaryBox = box(true, {x_expand: true, style_class: 'wtp-summary'});
         const head = box(false, {style_class: 'wtp-summary-head'});
         this._total = label('', 'wtp-summary-total');
@@ -270,11 +270,19 @@ class Indicator extends PanelMenu.Button {
         head.add_child(this._total);
         head.add_child(this._totalCaption);
         head.add_child(this._cpu);
-        this._bar = box(false, {style_class: 'wtp-membar', width: BAR_WIDTH});
+        this._bar = box(false, {
+            style_class: 'wtp-membar',
+            width: BAR_WIDTH,
+            reactive: true,
+            track_hover: true,
+        });
+        this._bar.connect('notify::hover', () => this._syncBarHover());
         this._legend = label('', 'wtp-summary-legend');
+        this._barTooltip = box(true, {style_class: 'wtp-bar-tooltip', visible: false});
         summaryBox.add_child(head);
         summaryBox.add_child(this._bar);
         summaryBox.add_child(this._legend);
+        summaryBox.add_child(this._barTooltip);
         summary.add_child(summaryBox);
         this.menu.addMenuItem(summary);
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
@@ -334,6 +342,7 @@ class Indicator extends PanelMenu.Button {
         } catch (e) {
             return;
         }
+        this._state = state;
         this._count.text = state.count > 0 ? `${state.count}` : '';
         this._count.visible = state.count > 0;
         if (state.attention)
@@ -341,8 +350,8 @@ class Indicator extends PanelMenu.Button {
         else
             this._icon.remove_style_class_name('wtp-alert');
 
-        this._applySummary(state.summary, state.count);
         this._applyServers(state.servers);
+        this._applySummary(state.summary, state.servers, state.count);
 
         this._retiredSection.removeAll();
         for (const r of state.retired) {
@@ -367,25 +376,180 @@ class Indicator extends PanelMenu.Button {
         }
     }
 
-    _applySummary(sum, count) {
-        this._total.text = sum.servers_memory;
-        this._totalCaption.text = `in ${count} server${count === 1 ? '' : 's'}`;
-        this._cpu.text = `CPU ${sum.cpu}`;
-        this._legend.text = `Other ${sum.other_memory}  ·  Free ${sum.free_memory}`;
+    _fmtPct(fraction) {
+        const pct = (fraction ?? 0) * 100;
+        if (pct <= 0)
+            return '0%';
+        if (pct < 0.1)
+            return '<0.1%';
+        if (pct < 10)
+            return `${pct.toFixed(1)}%`;
+        return `${Math.round(pct)}%`;
+    }
+
+    _applySummary(sum, servers, count) {
+        this._summaryData = {sum, servers: servers ?? [], count};
+        this._barSegments = [];
+        this._tooltipRows = [];
 
         this._bar.destroy_all_children();
-        const segment = (fraction, style, color) => {
-            const width = Math.round(fraction * BAR_WIDTH);
+        this._barTooltip.destroy_all_children();
+
+        const srvList = servers ?? [];
+        const minServerPx = srvList.length > 0 ? Math.min(10, Math.floor((BAR_WIDTH * 0.6) / srvList.length)) : 10;
+        let usedPx = 0;
+
+        const addSegment = (width, style, color, meta) => {
             if (width < 1)
-                return;
-            const w = new St.Widget({style_class: style, width: Math.max(width, 2), y_expand: true});
+                return null;
+            const w = new St.Button({
+                style_class: style,
+                width,
+                y_expand: true,
+                reactive: true,
+                track_hover: true,
+                can_focus: false,
+            });
             if (color)
                 w.set_style(`background-color: ${color};`);
+            w.connect('notify::hover', () => this._syncBarHover());
+            if (meta?.key) {
+                w.connect('clicked', () => {
+                    const row = this._rows.get(meta.key);
+                    row?.menu.toggle();
+                });
+            }
             this._bar.add_child(w);
+            this._barSegments.push({actor: w, meta});
+            return w;
         };
-        for (const s of sum.segments)
-            segment(s.fraction, 'wtp-bar-segment', s.color);
-        segment(sum.other_fraction, 'wtp-bar-other');
+
+        sum.segments.forEach((seg, i) => {
+            const srv = srvList[i];
+            const color = srv?.color ?? seg.color;
+            const width = Math.max(Math.round(seg.fraction * BAR_WIDTH), minServerPx);
+            usedPx += width;
+            const meta = {
+                kind: 'server',
+                index: i,
+                key: srv?.key,
+                port: seg.port ?? srv?.port ?? '',
+                name: seg.name ?? srv?.name ?? 'server',
+                memory: seg.memory ?? srv?.memory ?? '',
+                cpu: srv?.cpu ?? sum.cpu,
+                subtitle: srv?.subtitle ?? '',
+                color,
+                percent: seg.percent ?? this._fmtPct(seg.fraction),
+            };
+            addSegment(width, 'wtp-bar-segment', color, meta);
+
+            // Build corresponding row in the hover breakdown tooltip
+            const tipRow = box(false, {style_class: 'wtp-bar-tip-row'});
+            const dot = label('●', 'wtp-bar-tip-dot');
+            dot.set_style(`color: ${color};`);
+            const portLbl = label(`:${meta.port}`, 'wtp-bar-tip-port wtp-mono');
+            portLbl.set_style(`color: ${color};`);
+            const nameLbl = label(meta.name, 'wtp-bar-tip-name', {x_expand: true});
+            const statsLbl = label(`${meta.memory} (${meta.percent})`, 'wtp-bar-tip-stats wtp-mono');
+            tipRow.add_child(dot);
+            tipRow.add_child(portLbl);
+            tipRow.add_child(nameLbl);
+            tipRow.add_child(statsLbl);
+            this._barTooltip.add_child(tipRow);
+            this._tooltipRows.push({actor: tipRow, key: meta.key});
+        });
+
+        const remainingPx = Math.max(0, BAR_WIDTH - usedPx);
+        const freeFraction = Math.max(0, 1 - sum.segments.reduce((a, s) => a + s.fraction, 0) - sum.other_fraction);
+        const otherAndFree = sum.other_fraction + freeFraction;
+        const otherWidth = otherAndFree > 0
+            ? Math.round((sum.other_fraction / otherAndFree) * remainingPx)
+            : 0;
+        const freeWidth = Math.max(0, remainingPx - otherWidth);
+
+        if (otherWidth > 0) {
+            addSegment(otherWidth, 'wtp-bar-other', null, {
+                kind: 'other',
+                memory: sum.other_memory,
+                percent: this._fmtPct(sum.other_fraction),
+            });
+        }
+        if (freeWidth > 0) {
+            addSegment(freeWidth, 'wtp-bar-free', null, {
+                kind: 'free',
+                memory: sum.free_memory,
+                percent: this._fmtPct(freeFraction),
+            });
+        }
+
+        this._syncBarHover();
+    }
+
+    _syncBarHover() {
+        if (!this._summaryData)
+            return;
+        const {sum, servers, count} = this._summaryData;
+        const hovered = this._barSegments?.find(s => s.actor.hover);
+        const barHovered = this._bar.hover || !!hovered;
+
+        this._barTooltip.visible = barHovered && servers.length > 0;
+
+        for (const [, row] of this._rows)
+            row.remove_style_class_name('wtp-server-item-highlight');
+
+        if (!barHovered) {
+            this._total.text = sum.servers_memory;
+            this._total.set_style(null);
+            this._totalCaption.text = `in ${count} server${count === 1 ? '' : 's'}`;
+            this._cpu.text = `CPU ${sum.cpu}`;
+            this._legend.text = `Other ${sum.other_memory}  ·  Free ${sum.free_memory}`;
+            for (const s of this._barSegments ?? [])
+                s.actor.opacity = 255;
+            for (const r of this._tooltipRows ?? [])
+                r.actor.remove_style_class_name('wtp-bar-tip-row-active');
+            return;
+        }
+
+        const activeMeta = hovered?.meta;
+        for (const s of this._barSegments ?? [])
+            s.actor.opacity = (!activeMeta || s === hovered) ? 255 : 130;
+
+        for (const r of this._tooltipRows ?? []) {
+            if (activeMeta?.kind === 'server' && r.key === activeMeta.key)
+                r.actor.add_style_class_name('wtp-bar-tip-row-active');
+            else
+                r.actor.remove_style_class_name('wtp-bar-tip-row-active');
+        }
+
+        if (activeMeta?.kind === 'server') {
+            this._total.text = `:${activeMeta.port} ${activeMeta.name}`;
+            this._total.set_style(`color: ${activeMeta.color};`);
+            this._totalCaption.text = `${activeMeta.memory} (${activeMeta.percent} of RAM)`;
+            this._cpu.text = `CPU ${activeMeta.cpu}`;
+            this._legend.text = activeMeta.subtitle
+                ? `${activeMeta.subtitle}  ·  Click bar to expand`
+                : `Other ${sum.other_memory}  ·  Free ${sum.free_memory}`;
+            if (activeMeta.key)
+                this._rows.get(activeMeta.key)?.add_style_class_name('wtp-server-item-highlight');
+        } else if (activeMeta?.kind === 'other') {
+            this._total.text = sum.other_memory;
+            this._total.set_style(null);
+            this._totalCaption.text = `other apps (${activeMeta.percent} of RAM)`;
+            this._cpu.text = `CPU ${sum.cpu}`;
+            this._legend.text = `Servers ${sum.servers_memory} (${count})  ·  Free ${sum.free_memory}`;
+        } else if (activeMeta?.kind === 'free') {
+            this._total.text = sum.free_memory;
+            this._total.set_style(null);
+            this._totalCaption.text = `free memory (${activeMeta.percent} of RAM)`;
+            this._cpu.text = `CPU ${sum.cpu}`;
+            this._legend.text = `Servers ${sum.servers_memory} (${count})  ·  Other ${sum.other_memory}`;
+        } else {
+            this._total.text = sum.servers_memory;
+            this._total.set_style(null);
+            this._totalCaption.text = `in ${count} server${count === 1 ? '' : 's'}`;
+            this._cpu.text = `CPU ${sum.cpu}`;
+            this._legend.text = `Other ${sum.other_memory}  ·  Free ${sum.free_memory}`;
+        }
     }
 
     _applyServers(servers) {

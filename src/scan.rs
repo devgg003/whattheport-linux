@@ -18,6 +18,13 @@ use crate::tree::ProcessTree;
 
 pub const HISTORY_SECS: f64 = 600.0;
 
+#[derive(Clone)]
+struct DockerContainer {
+    id: String,
+    name: String,
+    image: String,
+}
+
 #[derive(Default)]
 pub struct ScanEngine {
     sockets: SocketScanner,
@@ -28,7 +35,7 @@ pub struct ScanEngine {
     histories: HashMap<String, Vec<Sample>>,
     last_active: HashMap<String, f64>,
     args_cache: HashMap<i32, (f64, Option<Args>)>,
-    docker_cache: (f64, HashMap<u16, (String, String)>),
+    docker_cache: (f64, HashMap<u16, DockerContainer>),
 }
 
 impl ScanEngine {
@@ -102,11 +109,23 @@ impl ScanEngine {
 
             let project = if is_docker {
                 match self.docker_container(socket.port, now) {
-                    Some((name, image)) => {
-                        command = Some(format!("docker: {name} ({image})"));
+                    Some(c) => {
+                        self.populate_docker_metrics(
+                            &c.id,
+                            processes,
+                            &tree,
+                            now,
+                            &mut sampled,
+                            &mut live_pids,
+                            &mut starts,
+                            &mut nodes,
+                            &mut total_mem,
+                            &mut total_cpu,
+                        );
+                        command = Some(format!("docker: {} ({})", c.name, c.image));
                         ProjectInfo {
-                            name,
-                            framework: Some(format!("Docker ({image})")),
+                            name: c.name,
+                            framework: Some(format!("Docker ({})", c.image)),
                             branch: Some("container".into()),
                             ..Default::default()
                         }
@@ -353,12 +372,119 @@ impl ScanEngine {
         }
     }
 
-    fn docker_container(&mut self, port: u16, now: f64) -> Option<(String, String)> {
+    fn docker_container(&mut self, port: u16, now: f64) -> Option<DockerContainer> {
         if now - self.docker_cache.0 > 10.0 {
             self.docker_cache = (now, docker_port_map().unwrap_or_default());
         }
         self.docker_cache.1.get(&port).cloned()
     }
+
+    #[allow(clippy::too_many_arguments)]
+    fn populate_docker_metrics(
+        &mut self,
+        container_id: &str,
+        processes: &HashMap<i32, Proc>,
+        tree: &ProcessTree,
+        now: f64,
+        sampled: &mut HashMap<i32, (u64, f64)>,
+        live_pids: &mut HashSet<i32>,
+        starts: &mut HashMap<i32, f64>,
+        nodes: &mut Vec<ServerProcess>,
+        total_mem: &mut u64,
+        total_cpu: &mut f64,
+    ) {
+        let Some((cg_pids, cg_mem)) = docker_cgroup_stats(container_id) else {
+            return;
+        };
+        let pid_set: HashSet<i32> = cg_pids.iter().copied().collect();
+        if pid_set.is_empty() {
+            if let Some(m) = cg_mem.filter(|m| *m > *total_mem) {
+                *total_mem = m;
+                if let Some(first) = nodes.first_mut() {
+                    first.memory = m;
+                }
+            }
+            return;
+        }
+
+        // Find the root process inside the container (the one whose parent is not in the container).
+        let root_pid = cg_pids
+            .iter()
+            .copied()
+            .find(|pid| processes.get(pid).is_none_or(|p| !pid_set.contains(&p.ppid)))
+            .unwrap_or(cg_pids[0]);
+
+        let ordered: Vec<(&Proc, usize)> = if processes.contains_key(&root_pid) {
+            tree.descendants(root_pid, &pid_set)
+                .into_iter()
+                .filter(|(p, _)| pid_set.contains(&p.pid))
+                .collect()
+        } else {
+            cg_pids
+                .iter()
+                .filter_map(|pid| processes.get(pid).map(|p| (p, usize::from(*pid != root_pid))))
+                .collect()
+        };
+
+        if ordered.is_empty() {
+            return;
+        }
+
+        nodes.clear();
+        *total_mem = 0;
+        *total_cpu = 0.0;
+        for (proc, depth) in ordered {
+            live_pids.insert(proc.pid);
+            let (mem, cpu) = *sampled
+                .entry(proc.pid)
+                .or_insert_with(|| (procfs::rss(proc.pid), self.cpu_percent(proc, now)));
+            *total_mem += mem;
+            *total_cpu += cpu;
+            starts.insert(proc.pid, proc.start_time);
+            nodes.push(ServerProcess {
+                pid: proc.pid,
+                name: self.display_name(proc),
+                depth,
+                memory: mem,
+                cpu,
+            });
+        }
+
+        // If cgroup memory.current exceeds raw RSS sum, attribute the remainder to the container root
+        // so both the server total and the sum across s.processes match cgroup memory usage.
+        if let Some(m) = cg_mem.filter(|m| *m > *total_mem) {
+            let extra = m - *total_mem;
+            *total_mem = m;
+            if let Some(first) = nodes.first_mut() {
+                first.memory += extra;
+                sampled.insert(first.pid, (first.memory, first.cpu));
+            }
+        }
+    }
+}
+
+fn docker_cgroup_stats(container_id: &str) -> Option<(Vec<i32>, Option<u64>)> {
+    if container_id.is_empty() {
+        return None;
+    }
+    let candidates = [
+        format!("/sys/fs/cgroup/system.slice/docker-{container_id}.scope"),
+        format!("/sys/fs/cgroup/docker/{container_id}"),
+    ];
+    for dir in candidates {
+        let procs_path = format!("{dir}/cgroup.procs");
+        if let Ok(text) = std::fs::read_to_string(&procs_path) {
+            let pids: Vec<i32> = text
+                .lines()
+                .filter_map(|l| l.trim().parse::<i32>().ok())
+                .collect();
+            let mem = std::fs::read_to_string(format!("{dir}/memory.current"))
+                .ok()
+                .and_then(|s| s.trim().parse::<u64>().ok());
+            return Some((pids, mem));
+        }
+    }
+    None
 }
 
 fn basename(p: &str) -> &str {
@@ -410,8 +536,8 @@ pub fn pretty_command(argv: &[String], comm: &str) -> String {
         .join(" ")
 }
 
-/// host port -> (container name, image), from the Docker Engine API.
-fn docker_port_map() -> Option<HashMap<u16, (String, String)>> {
+/// host port -> DockerContainer, from the Docker Engine API.
+fn docker_port_map() -> Option<HashMap<u16, DockerContainer>> {
     let mut stream = UnixStream::connect("/var/run/docker.sock").ok()?;
     stream.set_read_timeout(Some(Duration::from_millis(1500))).ok()?;
     stream
@@ -423,11 +549,19 @@ fn docker_port_map() -> Option<HashMap<u16, (String, String)>> {
     let containers: Vec<serde_json::Value> = serde_json::from_str(body).ok()?;
     let mut map = HashMap::new();
     for c in containers {
+        let id = c["Id"].as_str().unwrap_or("").to_string();
         let name = c["Names"][0].as_str().unwrap_or("").trim_start_matches('/').to_string();
         let image = c["Image"].as_str().unwrap_or("").to_string();
         for p in c["Ports"].as_array().into_iter().flatten() {
             if let Some(public) = p["PublicPort"].as_u64() {
-                map.insert(public as u16, (name.clone(), image.clone()));
+                map.insert(
+                    public as u16,
+                    DockerContainer {
+                        id: id.clone(),
+                        name: name.clone(),
+                        image: image.clone(),
+                    },
+                );
             }
         }
     }

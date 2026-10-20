@@ -1,0 +1,8 @@
+#!/bin/sh
+# Records the URL wtp asked the desktop to open.
+if [ -z "${WTP_OPEN_LOG:-}" ]; then
+    echo "WTP_OPEN_LOG is not set" >&2
+    exit 1
+fi
+printf '%s\n' "$*" >> "$WTP_OPEN_LOG"
+exit 0

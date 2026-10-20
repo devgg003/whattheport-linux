@@ -1,0 +1,62 @@
+name: e2e
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  cli:
+    name: CLI and daemon
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Build tools
+        run: sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential
+      - name: Unit tests
+        run: cargo test --locked
+      - name: Release binary
+        run: cargo build --release --locked
+      - name: CLI and daemon end-to-end
+        run: python3 e2e/test_cli_daemon.py
+
+  ui:
+    name: Tray and GNOME Shell
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Desktop packages
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            build-essential \
+            xvfb xdotool x11-utils scrot \
+            openbox xfce4-panel xfce4-sntray-plugin xfconf \
+            gnome-shell dbus-x11 at-spi2-core \
+            python3-dogtail python3-pyatspi python3-pil python3-dbus python3-gi \
+            mesa-utils libgl1-mesa-dri librsvg2-common
+      - name: Release binary
+        run: cargo build --release --locked
+      - name: Tray and GNOME Shell end-to-end
+        run: python3 e2e/test_ui.py
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+      - name: Upload UI screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-screenshots
+          path: |
+            e2e/artifacts/ui/*.png
+            e2e/artifacts/ui/*-report.json
+            e2e/artifacts/ui/*-names.txt
+          if-no-files-found: ignore

@@ -3,3 +3,6 @@
 *.log
 .idea/
 .vscode/
+e2e/artifacts/
+__pycache__/
+*.pyc

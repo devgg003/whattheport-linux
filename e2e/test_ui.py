@@ -165,9 +165,22 @@ def publish(path: Path) -> None:
 
 
 def walk(node):
+    """Walk an AT-SPI tree. A node can disappear while GNOME is rebuilding the menu."""
     yield node
-    for child in node.children:
+    try:
+        children = list(node.children)
+    except Exception:
+        return
+    for child in children:
         yield from walk(child)
+
+
+def node_name(node) -> str:
+    try:
+        name = node.name
+    except Exception:
+        return ""
+    return name or ""
 
 
 def prepare_projects(session: Session) -> dict[str, Path]:
@@ -360,11 +373,16 @@ def test_tray() -> int:
             if app is None:
                 report.check("tray menu is exposed to AT-SPI", False, "wrapper-2.0 had no server menus")
             else:
-                app.dump(fileName=str(ART / "tray-a11y.txt"))
+                try:
+                    app.dump(fileName=str(ART / "tray-a11y.txt"))
+                except Exception as exc:
+                    report.note(f"tray accessibility dump skipped: {exc}")
                 report.check("tray menu is exposed to AT-SPI", True)
-                # Free memory moves while the panel starts, so compare against
-                # the daemon at the moment the menu is open.
-                _assert_menu(report, app, state_of(session), kind="tray")
+                # "Other" memory is the rest of the machine and can cross the
+                # 1024 MiB formatting boundary (1014 MB vs 1 GB) between scans.
+                # Wait until the open menu and GetState use the same totals.
+                app, state = _wait_summary(session, lambda: tray_menu_nodes(session.env) or app)
+                _assert_menu(report, app, state, kind="tray")
         else:
             publish(shot)
     except Exception as exc:
@@ -375,13 +393,34 @@ def test_tray() -> int:
     return code
 
 
+def _summary_line(state: dict) -> str:
+    summary = state["summary"]
+    return f"Servers {summary['servers_memory']} · Other {summary['other_memory']} · Free {summary['free_memory']}"
+
+
+def _wait_summary(session: Session, app_fn, timeout: float = 8):
+    """Return the menu and the daemon state whose memory summary it is showing."""
+    deadline = time.time() + timeout
+    state = state_of(session)
+    found = app_fn()
+    while time.time() < deadline:
+        state = state_of(session)
+        app = app_fn()
+        if app is not None:
+            found = app
+            if _summary_line(state) in [node_name(n) for n in walk(app)]:
+                return found, state
+        time.sleep(0.4)
+    return found, state
+
+
 def _assert_menu(report: Report, app, state: dict, kind: str) -> None:
     nodes = list(walk(app))
-    names = [n.name for n in nodes if n.name]
+    names = [name for n in nodes if (name := node_name(n))]
     blob = "\n".join(names)
     (ART / f"{kind}-menu-names.txt").write_text(blob + "\n", encoding="utf-8")
     summary = state["summary"]
-    summary_line = f"Servers {summary['servers_memory']} · Other {summary['other_memory']} · Free {summary['free_memory']}"
+    summary_line = _summary_line(state)
     if kind == "tray":
         report.check("tray summary matches the daemon", summary_line in names, f"wanted {summary_line!r}\n{blob[:500]}")
     else:
@@ -416,14 +455,14 @@ def _assert_menu(report: Report, app, state: dict, kind: str) -> None:
         report.check("deleted-worktree tray submenu was found", deleted is not None)
         report.check("protected tray submenu was found", protected is not None)
         if deleted is not None:
-            deleted_names = [n.name for n in walk(deleted)]
+            deleted_names = [node_name(n) for n in walk(deleted)]
             report.check(
                 "deleted worktree has Stop and no Restart",
                 "Stop" in deleted_names and "Restart" not in deleted_names and any("Worktree deleted" in n for n in deleted_names),
                 " | ".join(deleted_names),
             )
         if protected is not None:
-            protected_names = [n.name for n in walk(protected)]
+            protected_names = [node_name(n) for n in walk(protected)]
             report.check(
                 "protected database offers Open and neither Stop nor Restart",
                 any(n.startswith("Open http://") for n in protected_names)
@@ -442,7 +481,12 @@ def _assert_menu(report: Report, app, state: dict, kind: str) -> None:
 def _submenu(nodes, server: dict):
     prefix = f":{server['port']}  {server['name']}  —"
     for node in nodes:
-        if node.roleName == "menu" and node.name.startswith(prefix):
+        try:
+            role = node.roleName
+            name = node.name or ""
+        except Exception:
+            continue
+        if role == "menu" and name.startswith(prefix):
             return node
     return None
 
@@ -459,20 +503,21 @@ def _gnome_app():
 def _showing_names(app) -> list[str]:
     names = []
     for node in walk(app):
-        if not node.name:
+        name = node_name(node)
+        if not name:
             continue
         try:
             visible = bool(node.showing)
         except Exception:
             visible = True
         if visible:
-            names.append(node.name)
+            names.append(name)
     return names
 
 
 def _click_name(env: dict, app, text: str) -> bool:
     for node in walk(app):
-        if node.name != text:
+        if node_name(node) != text:
             continue
         try:
             if not node.showing:
@@ -593,7 +638,10 @@ def _drive_gnome_menu(report: Report, session: Session, state: dict, log_tail: s
     if shell_app is None:
         report.check("GNOME Shell stays in the accessibility tree", False)
         return
-    shell_app.dump(fileName=str(ART / "gnome-a11y.txt"))
+    try:
+        shell_app.dump(fileName=str(ART / "gnome-a11y.txt"))
+    except Exception as exc:
+        report.note(f"GNOME accessibility dump skipped: {exc}")
     names = _showing_names(shell_app)
     (ART / "gnome-menu-names.txt").write_text("\n".join(names) + "\n", encoding="utf-8")
     # Re-read after the shell has started; machine-wide free memory moves.

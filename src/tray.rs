@@ -73,7 +73,7 @@ fn toggle(label: &str, key: &'static str, checked: bool) -> MenuItem<Tray> {
 }
 
 fn server_menu(s: &ServerView) -> MenuItem<Tray> {
-    let mut items = vec![info(&s.subtitle)];
+    let mut items = vec![info(crate::view::mark_estimated(&s.subtitle, s.session_estimated))];
     if let Some(cmd) = &s.command {
         items.push(info(cmd));
     }

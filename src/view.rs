@@ -59,6 +59,8 @@ pub struct ServerView {
     pub framework: Option<String>,
     pub branch: Option<String>,
     pub agent: Option<String>,
+    /// True when `agent` was inferred from the working folder rather than identified.
+    pub session_estimated: bool,
     pub uptime: String,
     pub uptime_seconds: u64,
     pub command: Option<String>,
@@ -197,12 +199,18 @@ pub fn build(i: Inputs) -> State {
     }
 }
 
+/// Prefix a session title when the link is only a folder guess. Idempotent.
+pub(crate) fn mark_estimated(text: &str, estimated: bool) -> String {
+    if estimated && !text.starts_with('~') { format!("~{text}") } else { text.to_string() }
+}
+
 fn server_view(s: &Server, i: &Inputs, threshold: u64, color: String) -> ServerView {
     let uptime = format::duration(s.uptime(i.now));
-    let agent = s
-        .agent
-        .as_ref()
-        .map(|a| a.title.clone().unwrap_or_else(|| a.kind.to_string()));
+    let estimated = s.agent.as_ref().is_some_and(|a| a.estimated);
+    let agent = s.agent.as_ref().map(|a| {
+        let title = a.title.clone().unwrap_or_else(|| a.kind.to_string());
+        mark_estimated(&title, a.estimated)
+    });
     let context = agent
         .clone()
         .or_else(|| s.project.branch.clone())
@@ -235,9 +243,10 @@ fn server_view(s: &Server, i: &Inputs, threshold: u64, color: String) -> ServerV
         framework: s.project.framework.clone(),
         branch: s.project.branch.clone(),
         agent: s.agent.as_ref().map(|a| match &a.title {
-            Some(t) => format!("{}: {t}", a.kind),
-            None => a.kind.to_string(),
+            Some(t) => format!("{}: {}", a.kind, mark_estimated(t, a.estimated)),
+            None => mark_estimated(a.kind, a.estimated),
         }),
+        session_estimated: estimated,
         uptime_seconds: s.uptime(i.now) as u64,
         uptime,
         command: s.command.clone(),
@@ -281,4 +290,88 @@ fn spark(s: &Server) -> Vec<f64> {
     let range = (max - min).max(max * 0.1).max(1.0);
     let floor = max - range;
     values.iter().map(|v| ((v - floor) / range * 1000.0).round() / 1000.0).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+    use wtp_core::agents::AgentSession;
+    use wtp_core::model::Server;
+    use wtp_core::prefs::Prefs;
+    use wtp_core::procfs::SystemMemory;
+    use wtp_core::project::ProjectInfo;
+
+    fn view_of(agent: AgentSession) -> ServerView {
+        let prefs = Prefs::default();
+        let memory = SystemMemory { total: 8 << 30, available: 4 << 30 };
+        let servers = vec![Server {
+            key: "3000-1-1".into(),
+            port: 3000,
+            pid: 1,
+            root_pid: 1,
+            process_name: "node".into(),
+            addresses: vec![],
+            cwd: Some("/workspace/app".into()),
+            cwd_exists: true,
+            command: Some("next dev".into()),
+            launch: None,
+            launch_directory: None,
+            started_at: 1_000_000.0,
+            project: ProjectInfo { name: "docs-site".into(), ..Default::default() },
+            agent: Some(agent),
+            processes: vec![],
+            process_starts: HashMap::new(),
+            memory: 50 * 1024 * 1024,
+            cpu: 0.5,
+            connections: 0,
+            history: vec![],
+            last_active: 1_000_060.0,
+            is_protected: false,
+        }];
+        let colors = HashMap::new();
+        let snoozed = HashMap::new();
+        let github = HashMap::new();
+        build(Inputs {
+            now: 1_000_060.0,
+            prefs: &prefs,
+            servers: &servers,
+            colors: &colors,
+            memory: &memory,
+            retired: vec![],
+            snoozed: &snoozed,
+            github: &github,
+            launch_at_login: false,
+        })
+        .servers
+        .into_iter()
+        .next()
+        .unwrap()
+    }
+
+    #[test]
+    fn estimated_codex_session_is_marked_in_the_view() {
+        let exact = view_of(AgentSession {
+            kind: "Codex",
+            id: "thread-a".into(),
+            title: Some("Fix OAuth callback".into()),
+            estimated: false,
+        });
+        assert!(!exact.session_estimated);
+        assert_eq!(exact.subtitle, "Fix OAuth callback · up 1m");
+        assert_eq!(exact.agent.as_deref(), Some("Codex: Fix OAuth callback"));
+
+        let guessed = view_of(AgentSession {
+            kind: "Codex",
+            id: "thread-b".into(),
+            title: Some("Migrate docs to Astro 5".into()),
+            estimated: true,
+        });
+        assert!(guessed.session_estimated);
+        assert_eq!(guessed.subtitle, "~Migrate docs to Astro 5 · up 1m");
+        assert_eq!(guessed.agent.as_deref(), Some("Codex: ~Migrate docs to Astro 5"));
+        assert!(serde_json::to_string(&guessed).unwrap().contains("\"session_estimated\":true"));
+        assert_eq!(mark_estimated(&guessed.subtitle, true), guessed.subtitle);
+    }
 }

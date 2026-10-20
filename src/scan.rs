@@ -174,7 +174,14 @@ impl ScanEngine {
             history.retain(|s| s.time >= now - HISTORY_SECS);
             let history = history.clone();
 
-            let agent = self.agents.resolve(&env, cwd.as_deref(), prefs.link_claude, prefs.link_codex);
+            let agent = self.agents.resolve(
+                &env,
+                cwd.as_deref(),
+                root.start_time,
+                command.as_deref(),
+                prefs.link_claude,
+                prefs.link_codex,
+            );
             let is_protected = protected.contains(&socket.command)
                 || command.as_deref().is_some_and(|c| protected.iter().any(|p| c.contains(p.as_str())));
 

@@ -9,7 +9,7 @@ wtp — dev servers on this machine
 
 Usage:
   wtp                  List dev servers
-  wtp --json           Print the full state as JSON (for scripts and status bars)
+  wtp --json           Print the server list as a JSON array (for scripts and status bars)
   wtp open <port>      Open http://localhost:<port>
   wtp stop <port>      Stop a server and its process tree
   wtp restart <port>   Restart a server with its original command

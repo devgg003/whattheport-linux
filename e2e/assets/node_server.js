@@ -26,7 +26,12 @@ if (process.env.PIDFILE) {
     fs.writeFileSync(process.env.PIDFILE, String(process.pid));
 }
 
-http.createServer((_req, res) => {
+const server = http.createServer((_req, res) => {
     res.writeHead(200, {'content-type': 'text/plain'});
     res.end('ok');
-}).listen(port, '127.0.0.1');
+});
+server.on('error', (err) => {
+    console.error(err);
+    process.exit(1);
+});
+server.listen(port, '127.0.0.1');

@@ -104,6 +104,44 @@ def read_pidfile(path: Path, timeout: float = 8.0) -> int:
     raise CheckFailure(f"pidfile {path} was not written")
 
 
+def listening_pid(port: int) -> int | None:
+    """Pid that is listening on 127.0.0.1:port, when /proc can name it."""
+    hexport = f"{port:04X}"
+    inodes: set[str] = set()
+    for table in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            lines = Path(table).read_text(encoding="utf-8").splitlines()[1:]
+        except OSError:
+            continue
+        for line in lines:
+            parts = line.split()
+            if len(parts) < 10 or parts[3] != "0A":
+                continue
+            local = parts[1]
+            if ":" not in local:
+                continue
+            _ip, phex = local.rsplit(":", 1)
+            if phex.upper() == hexport:
+                inodes.add(parts[9])
+    if not inodes:
+        return None
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            fds = list((entry / "fd").iterdir())
+        except OSError:
+            continue
+        for fd in fds:
+            try:
+                target = os.readlink(fd)
+            except OSError:
+                continue
+            if target.startswith("socket:[") and target[8:-1] in inodes:
+                return int(entry.name)
+    return None
+
+
 def wait_port(port: int, timeout: float = 10.0) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -353,6 +391,9 @@ class Session:
         self.server_pids.append(pid)
         if not wait_port(port):
             raise CheckFailure(f"node server on :{port} never accepted connections")
+        owner = listening_pid(port)
+        if owner != pid:
+            raise CheckFailure(f":{port} is held by pid {owner}, not the spawned node {pid}")
         return pid
 
     def spawn_python(self, project: Path, port: int, extra_env: dict | None = None) -> int:
@@ -379,6 +420,9 @@ class Session:
         self.server_pids.append(pid)
         if not wait_port(port):
             raise CheckFailure(f"python server on :{port} never accepted connections")
+        owner = listening_pid(port)
+        if owner != pid:
+            raise CheckFailure(f":{port} is held by pid {owner}, not the spawned python {pid}")
         return pid
 
     def spawn_postgres(self, project: Path, port: int) -> int:
@@ -407,6 +451,9 @@ class Session:
         self.server_pids.append(pid)
         if not wait_port(port):
             raise CheckFailure(f"postgres stand-in on :{port} never accepted connections")
+        owner = listening_pid(port)
+        if owner != pid:
+            raise CheckFailure(f":{port} is held by pid {owner}, not the spawned postgres {pid}")
         comm = Path(f"/proc/{pid}/comm").read_text(encoding="utf-8").strip()
         if comm != "postgres":
             raise CheckFailure(f"expected comm postgres, got {comm!r}")

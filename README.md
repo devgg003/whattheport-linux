@@ -113,7 +113,7 @@ $ wtp
 | Command | What it does |
 | :--- | :--- |
 | `wtp` | List dev servers |
-| `wtp --json` | Print the server list as JSON, for scripts and status bars |
+| `wtp --json` | Print the server list as a JSON array, for scripts and status bars |
 | `wtp open <port>` | Open `http://localhost:<port>` |
 | `wtp stop <port>` | Stop a server and its whole process tree |
 | `wtp restart <port>` | Restart a server with its original command |

@@ -362,7 +362,9 @@ def test_tray() -> int:
             else:
                 app.dump(fileName=str(ART / "tray-a11y.txt"))
                 report.check("tray menu is exposed to AT-SPI", True)
-                _assert_menu(report, app, state, kind="tray")
+                # Free memory moves while the panel starts, so compare against
+                # the daemon at the moment the menu is open.
+                _assert_menu(report, app, state_of(session), kind="tray")
         else:
             publish(shot)
     except Exception as exc:
@@ -594,6 +596,8 @@ def _drive_gnome_menu(report: Report, session: Session, state: dict, log_tail: s
     shell_app.dump(fileName=str(ART / "gnome-a11y.txt"))
     names = _showing_names(shell_app)
     (ART / "gnome-menu-names.txt").write_text("\n".join(names) + "\n", encoding="utf-8")
+    # Re-read after the shell has started; machine-wide free memory moves.
+    state = state_of(session)
     _assert_menu(report, shell_app, state, kind="gnome")
     _assert_gnome_rows(report, state, names)
     _assert_bar_colors(report, opened, state)

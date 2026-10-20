@@ -153,15 +153,14 @@ def _run(report: Report, session: Session, out_dir: Path) -> None:
     report.check("list summary is present", "in servers" in text.stdout and "free" in text.stdout, text.stdout)
     (out_dir / "list.txt").write_text(text.stdout, encoding="utf-8")
 
-    # `--help` still says the full state object. README and the binary both
-    # print the server array. Record the mismatch; the assertion below is the
-    # README contract (a JSON list of servers).
     help_text = session.run("--help")
-    if "full state" in help_text.stdout:
-        report.note(
-            "wtp --help says --json prints the full state, but stdout is the server array. "
-            "README describes the array. Help text and behaviour disagree."
-        )
+    report.check(
+        "wtp --help describes --json as a JSON array of servers",
+        help_text.returncode == 0
+        and "Print the server list as a JSON array" in help_text.stdout
+        and "full state" not in help_text.stdout,
+        help_text.stdout,
+    )
 
     raw_json = session.run("--json")
     parsed = json.loads(raw_json.stdout)
@@ -407,7 +406,11 @@ def _run(report: Report, session: Session, out_dir: Path) -> None:
             return row
 
         again = wait_until(restarted_process, timeout=20, desc="restarted web-dashboard")
-        report.check("restarted server is a new process", not pid_alive(claude_pid))
+        # Restart replaces the process. Track the new pid so teardown does not
+        # leave it listening after this home directory is removed.
+        new_pid = int(str(again["key"]).split("-")[1])
+        session.server_pids = [new_pid if pid == claude_pid else pid for pid in session.server_pids]
+        report.check("restarted server is a new process", not pid_alive(claude_pid) and pid_alive(new_pid))
         report.check("restart writes a port log", log_path.exists(), str(log_path))
     except Exception as exc:
         again = session.server(PORT_CLAUDE) or {}

@@ -26,6 +26,24 @@ const TOGGLES = [
     ['launch_at_login', 'Launch at login'],
 ];
 
+function markEstimated(text, estimated) {
+    if (!text || !estimated || text.startsWith('~'))
+        return text;
+    return `~${text}`;
+}
+
+function markSession(agent, estimated) {
+    if (!agent || !estimated)
+        return agent;
+    const sep = agent.indexOf(': ');
+    if (sep === -1)
+        return markEstimated(agent, true);
+    const title = agent.slice(sep + 2);
+    if (title.startsWith('~'))
+        return agent;
+    return `${agent.slice(0, sep + 2)}~${title}`;
+}
+
 function call(method, params = null, onReply = null) {
     Gio.DBus.session.call(
         BUS_NAME, OBJECT_PATH, IFACE, method, params, null,
@@ -143,13 +161,14 @@ class ServerRow extends PopupMenu.PopupSubMenuMenuItem {
         this._port.text = `:${s.port}`;
         this._port.set_style(`color: ${s.color};`);
         this._name.text = s.name;
-        this._subtitle.text = s.cleanup ? `${s.subtitle} · ${s.cleanup}` : s.subtitle;
+        const subtitle = markEstimated(s.subtitle, s.session_estimated);
+        this._subtitle.text = s.cleanup ? `${subtitle} · ${s.cleanup}` : subtitle;
         this._memory.text = s.memory;
         this._memory.style_class = s.attention ? 'wtp-row-mem wtp-alert' : 'wtp-row-mem';
         this._stop.visible = !s.protected;
         this._spark.queue_repaint();
 
-        const detailKey = JSON.stringify([s.framework, s.agent, s.branch, s.uptime, s.connections, s.command,
+        const detailKey = JSON.stringify([s.framework, s.agent, s.session_estimated, s.branch, s.uptime, s.connections, s.command,
             s.directory, s.cpu, s.growth, s.cleanup, s.processes]);
         if (!prev || detailKey !== this._detailKey) {
             this._detailKey = detailKey;
@@ -173,7 +192,7 @@ class ServerRow extends PopupMenu.PopupSubMenuMenuItem {
             this._detailsBox.add_child(l);
         };
         line('Framework', s.framework);
-        line('Session', s.agent);
+        line('Session', markSession(s.agent, s.session_estimated));
         line('Branch', s.branch);
         line('Uptime', `${s.uptime}${s.connections ? ` · ${s.connections} connection${s.connections === 1 ? '' : 's'}` : ''}`);
         line('Command', s.command, 'wtp-mono');
@@ -437,7 +456,7 @@ class Indicator extends PanelMenu.Button {
                 name: seg.name ?? srv?.name ?? 'server',
                 memory: seg.memory ?? srv?.memory ?? '',
                 cpu: srv?.cpu ?? sum.cpu,
-                subtitle: srv?.subtitle ?? '',
+                subtitle: markEstimated(srv?.subtitle ?? '', srv?.session_estimated),
                 color,
                 percent: seg.percent ?? this._fmtPct(seg.fraction),
             };

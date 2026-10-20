@@ -35,7 +35,7 @@ tree in one click.
 - **Colour-coded memory bar.** One segment per server, coloured to match its row, next to everything else using RAM and what is free. Hover the bar to see every running server with its memory and share of RAM; click a segment to expand that server.
 - **Process trees.** Wrapper chains such as `npm run dev` → `sh -c` → `next dev` → `next-server` are reported as one server with combined memory and CPU.
 - **Projects and branches.** Names come from `package.json`, `pyproject.toml`, `Cargo.toml`, `go.mod`, `Gemfile` and `.git/HEAD`, including linked worktrees. Frameworks such as Next.js, Vite and Astro are detected from your dependencies.
-- **Agent sessions.** Servers started by Claude Code (`CLAUDE_CODE_SESSION_ID`) or Codex show the conversation title.
+- **Agent sessions.** Servers started by Claude Code (`CLAUDE_CODE_SESSION_ID`) or Codex show the conversation title. Codex uses `CODEX_THREAD_ID` when the process inherited it, otherwise the chat in that folder that was already open when the process started. If several chats share the folder and the one that started the server cannot be told apart, the title is prefixed with `~` and `session_estimated` is true in `wtp --json`.
 - **Leak and memory alerts.** A desktop notification with **Stop** and **Mute alerts** buttons appears when a server passes the memory threshold (default 2 GB) or grows by more than 500 MB in 10 minutes.
 - **Clean up.** Servers from deleted worktrees, idle ones and long-running ones are suggested for cleanup, or stopped automatically if you choose.
 - **Databases are protected.** `postgres`, `redis-server`, `mysqld`, `mariadbd`, `mongod` and `docker-proxy` are never stopped or restarted, and you can add your own.

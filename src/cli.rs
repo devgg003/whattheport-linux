@@ -88,7 +88,10 @@ pub async fn list(json: bool) -> Result<()> {
         let name: String = s["name"].as_str().unwrap_or("").chars().take(width).collect();
         let memory = format!("{:>9}", s["memory"].as_str().unwrap_or(""));
         let memory = if s["attention"].as_bool() == Some(true) { paint("33;1", &memory) } else { memory };
-        let mut detail = s["subtitle"].as_str().unwrap_or("").to_string();
+        let mut detail = crate::view::mark_estimated(
+            s["subtitle"].as_str().unwrap_or(""),
+            s["session_estimated"].as_bool() == Some(true),
+        );
         if let Some(c) = s["cleanup"].as_str() {
             detail.push_str(&format!(" · {}", paint("2", &format!("clean up: {c}"))));
         }

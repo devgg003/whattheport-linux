@@ -92,6 +92,7 @@ pub async fn list(json: bool) -> Result<()> {
             s["subtitle"].as_str().unwrap_or(""),
             s["session_estimated"].as_bool() == Some(true),
         );
+        append_resource_labels(&mut detail, s);
         if let Some(c) = s["cleanup"].as_str() {
             detail.push_str(&format!(" · {}", paint("2", &format!("clean up: {c}"))));
         }
@@ -111,6 +112,15 @@ pub async fn list(json: bool) -> Result<()> {
         sum["cpu"].as_str().unwrap_or("")
     );
     Ok(())
+}
+
+fn append_resource_labels(detail: &mut String, server: &serde_json::Value) {
+    for key in ["total_memory_label", "memory_change_label", "resources_label"] {
+        if let Some(value) = server.get(key).and_then(|v| v.as_str()).filter(|v| !v.is_empty()) {
+            detail.push_str(" · ");
+            detail.push_str(value);
+        }
+    }
 }
 
 pub async fn act(action: &str, port: u16) -> Result<()> {
@@ -160,5 +170,31 @@ pub async fn quit() -> Result<()> {
             Ok(())
         }
         None => Err("not running".into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cli_detail_includes_labeled_fields_and_ignores_missing_ones() {
+        let mut detail = "Fix OAuth callback · up 1m".to_string();
+        let server = serde_json::json!({
+            "total_memory_label": "Total memory: 1.4 GB",
+            "memory_change_label": "Current change: +120 MB in the last 5 min",
+            "resources_label": "CPU 35% · 9.0% of RAM",
+            "memory": "1.40 GB",
+            "cpu": "35%"
+        });
+        append_resource_labels(&mut detail, &server);
+        assert_eq!(
+            detail,
+            "Fix OAuth callback · up 1m · Total memory: 1.4 GB · Current change: +120 MB in the last 5 min · CPU 35% · 9.0% of RAM"
+        );
+
+        let mut legacy = "up 1m".to_string();
+        append_resource_labels(&mut legacy, &serde_json::json!({"memory": "10 MB", "cpu": "0%"}));
+        assert_eq!(legacy, "up 1m");
     }
 }

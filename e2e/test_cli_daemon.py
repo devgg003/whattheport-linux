@@ -151,6 +151,11 @@ def _run(report: Report, session: Session, out_dir: Path) -> None:
     report.check("wtp list exits 0", text.returncode == 0, text.stderr)
     report.check("list output is plain text when stdout is not a tty", "\x1b" not in text.stdout, repr(text.stdout[:200]))
     report.check("list summary is present", "in servers" in text.stdout and "free" in text.stdout, text.stdout)
+    report.check(
+        "list labels total memory, current change, and cpu/ram",
+        "Total memory:" in text.stdout and "Current change:" in text.stdout and "of RAM" in text.stdout,
+        text.stdout,
+    )
     (out_dir / "list.txt").write_text(text.stdout, encoding="utf-8")
 
     help_text = session.run("--help")
@@ -183,6 +188,37 @@ def _run(report: Report, session: Session, out_dir: Path) -> None:
     vite = by_port(servers, PORT_STOP)
 
     report.check("node server is named from package.json", claude["name"] == "web-dashboard", json.dumps(claude))
+    report.check(
+        "json keeps memory, cpu, and growth and adds labeled resource fields",
+        "memory" in claude
+        and "memory_bytes" in claude
+        and "cpu" in claude
+        and "growth" in claude
+        and str(claude.get("total_memory_label", "")).startswith("Total memory:")
+        and str(claude.get("memory_change_label", "")).startswith("Current change:")
+        and "CPU" in str(claude.get("resources_label", ""))
+        and "of RAM" in str(claude.get("resources_label", ""))
+        and "memory_delta_bytes" in claude
+        and "memory_window_seconds" in claude
+        and "ram_percent" in claude,
+        json.dumps(
+            {
+                k: claude.get(k)
+                for k in (
+                    "memory",
+                    "memory_bytes",
+                    "cpu",
+                    "growth",
+                    "total_memory_label",
+                    "memory_change_label",
+                    "resources_label",
+                    "memory_delta_bytes",
+                    "memory_window_seconds",
+                    "ram_percent",
+                )
+            }
+        ),
+    )
     report.check("node framework is Next.js 15", claude.get("framework") == "Next.js 15", str(claude.get("framework")))
     report.check("node branch is main", claude.get("branch") == "main", str(claude.get("branch")))
     report.check(
@@ -323,29 +359,62 @@ def _run(report: Report, session: Session, out_dir: Path) -> None:
         )
     report.check(
         "leak cleanup label is present and the row turns amber",
-        "in 10m" in (leaking.get("cleanup") or "") and leaking.get("color") == "#FFB224",
+        "in the last" in (leaking.get("cleanup") or "") and "+" in (leaking.get("cleanup") or "") and leaking.get("color") == "#FFB224",
         json.dumps({k: leaking.get(k) for k in ("cleanup", "color")}),
+    )
+    report.check(
+        "leaking server json labels total, change, and cpu/ram",
+        str(leaking.get("total_memory_label", "")).startswith("Total memory:")
+        and "Current change:" in str(leaking.get("memory_change_label", ""))
+        and "in the last" in str(leaking.get("memory_change_label", ""))
+        and "CPU" in str(leaking.get("resources_label", ""))
+        and "of RAM" in str(leaking.get("resources_label", ""))
+        and "memory_bytes" in leaking,
+        json.dumps(
+            {
+                k: leaking.get(k)
+                for k in (
+                    "memory",
+                    "growth",
+                    "total_memory_label",
+                    "memory_change_label",
+                    "resources_label",
+                    "memory_delta_bytes",
+                    "memory_window_seconds",
+                )
+            }
+        ),
     )
     try:
         alerts = wait_until(
-            lambda: [n for n in session.notifications() if "needs attention" in n.get("summary", "")],
+            lambda: [
+                n
+                for n in session.notifications()
+                if "Total memory:" in n.get("body", "") and str(PORT_GROW) in n.get("summary", "")
+            ],
             timeout=10,
             desc="attention notification",
         )
     except Exception as exc:
         report.check(
-            "memory-growth notification says the server grew",
+            "memory-growth notification labels total, change, and cpu/ram",
             False,
             f"{exc}\nnotifications={session.notifications()}\ndaemon={session.daemon_log_text()[-1500:]}",
         )
     else:
-        grew = [n for n in alerts if "grew by" in n.get("body", "")]
+        grew = [n for n in alerts if "leak-lab" in n.get("summary", "") and "Current change:" in n.get("body", "")]
+        body = grew[0]["body"] if grew else ""
+        summary = grew[0]["summary"] if grew else ""
         report.check(
-            "memory-growth notification says the server grew",
+            "memory-growth notification labels total, change, and cpu/ram",
             len(grew) == 1
-            and "leak-lab" in grew[0]["body"]
-            and "in 10 minutes" in grew[0]["body"]
-            and grew[0]["summary"] == f"Port {PORT_GROW} needs attention"
+            and f"Port {PORT_GROW}" in summary
+            and "leak-lab" in summary
+            and "Total memory:" in body
+            and "Current change:" in body
+            and "in the last" in body
+            and "CPU" in body
+            and "of RAM" in body
             and grew[0]["actions"][:4] == ["stop", "Stop", "snooze", "Mute alerts"],
             json.dumps(alerts),
         )

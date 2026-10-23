@@ -36,7 +36,7 @@ tree in one click.
 - **Process trees.** Wrapper chains such as `npm run dev` → `sh -c` → `next dev` → `next-server` are reported as one server with combined memory and CPU.
 - **Projects and branches.** Names come from `package.json`, `pyproject.toml`, `Cargo.toml`, `go.mod`, `Gemfile` and `.git/HEAD`, including linked worktrees. Frameworks such as Next.js, Vite and Astro are detected from your dependencies.
 - **Agent sessions.** Servers started by Claude Code (`CLAUDE_CODE_SESSION_ID`) or Codex show the conversation title. Codex uses `CODEX_THREAD_ID` when the process inherited it, otherwise the chat in that folder that was already open when the process started. If several chats share the folder and the one that started the server cannot be told apart, the title is prefixed with `~` and `session_estimated` is true in `wtp --json`.
-- **Leak and memory alerts.** A desktop notification with **Stop** and **Mute alerts** buttons appears when a server passes the memory threshold (default 2 GB) or grows by more than 500 MB in 10 minutes.
+- **Leak and memory alerts.** A desktop notification with **Stop** and **Mute alerts** buttons appears when a server passes the memory threshold (default 2 GB) or grows by more than 500 MB inside the 10-minute history. The notification names the server (port, project or command, and the linked Claude Code or Codex session when one is known) and labels what was measured: resident memory of the process tree (`Total memory: 1.4 GB`), the change over the actual sample window (`Current change: +120 MB in the last 5 min`), and CPU plus share of RAM (`CPU 35% · 9.0% of RAM`). The same server is not notified again until `snooze_minutes` have passed and usage has climbed by a meaningful step (at least 256 MB or 25%, whichever is larger). A later alert updates the previous notification instead of stacking a new one. These are memory figures, not network traffic.
 - **Clean up.** Servers from deleted worktrees, idle ones and long-running ones are suggested for cleanup, or stopped automatically if you choose.
 - **Databases are protected.** `postgres`, `redis-server`, `mysqld`, `mariadbd`, `mongod` and `docker-proxy` are never stopped or restarted, and you can add your own.
 - **Stop and restart.** Stop sends SIGTERM to the whole tree, then SIGKILL after 3 seconds to anything still running. Restart re-runs the original command in its original folder, logging to `~/.local/state/whattheport/port-N.log`.
@@ -104,11 +104,13 @@ $ wtp
 :3000  web-dashboard            147 MB      0%  Fix OAuth callback · up 1m
 :4000  billing-api-invoices      18 MB      0%  Worktree deleted · up 1m · clean up: Worktree deleted
 :4321  docs-site                 50 MB    0.5%  Migrate docs to Astro 5 · up 1m
-:5173  studio-vite             1.10 GB      0%  main · up 1m · clean up: +750 MB in 10m
+:5173  studio-vite             1.10 GB      0%  main · up 1m · Total memory: 1.1 GB · Current change: +750 MB in the last 10 min · CPU 0% · 9.0% of RAM · clean up: +750 MB in the last 10 min
 :5432  local-db                   1 MB      0%  up 1m
 
 1.3 GB in servers · 5.2 GB other · 9.1 GB free · CPU <0.1%
 ```
+
+Each row also includes the labeled figures `Total memory`, `Current change` (with the real sample window), and `CPU · % of RAM`. `wtp --json` adds `total_memory_label`, `memory_change_label`, `resources_label`, `memory_delta_bytes`, `memory_window_seconds` and `ram_percent` beside the existing `memory`, `memory_bytes`, `cpu` and `growth` keys.
 
 | Command | What it does |
 | :--- | :--- |
@@ -147,7 +149,7 @@ Most options are in the menu's **Settings** submenu. Everything lives in `~/.con
 | `scan_interval` | `2.0` | Seconds between scans |
 | `threshold_gb` | `2.0` | Memory alert threshold |
 | `leak_warnings` | `true` | Notify on high memory or >500 MB growth in 10 minutes |
-| `snooze_minutes` | `60` | Minimum time between repeat alerts for one server |
+| `snooze_minutes` | `60` | Minimum time before the same server can alert again. A repeat also requires a meaningful increase (256 MB or 25%, whichever is larger). Mute still silences that server |
 | `cleanup_mode` | `"ask"` | `"off"`, `"ask"` (notify) or `"automatic"` (stop) |
 | `cleanup_notify` | `true` | Send a notification for cleanup suggestions and automatic stops |
 | `cleanup_idle_hours` | `4` | Hours with no connections and under 2% CPU before a server counts as idle |

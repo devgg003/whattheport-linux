@@ -32,6 +32,13 @@ function markEstimated(text, estimated) {
     return `~${text}`;
 }
 
+function valueAfter(text) {
+    if (!text)
+        return '';
+    const sep = text.indexOf(': ');
+    return sep === -1 ? text : text.slice(sep + 2);
+}
+
 function markSession(agent, estimated) {
     if (!agent || !estimated)
         return agent;
@@ -169,7 +176,7 @@ class ServerRow extends PopupMenu.PopupSubMenuMenuItem {
         this._spark.queue_repaint();
 
         const detailKey = JSON.stringify([s.framework, s.agent, s.session_estimated, s.branch, s.uptime, s.connections, s.command,
-            s.directory, s.cpu, s.growth, s.cleanup, s.processes]);
+            s.directory, s.cpu, s.growth, s.total_memory_label, s.memory_change_label, s.resources_label, s.cleanup, s.processes]);
         if (!prev || detailKey !== this._detailKey) {
             this._detailKey = detailKey;
             this._renderDetails(s);
@@ -197,7 +204,13 @@ class ServerRow extends PopupMenu.PopupSubMenuMenuItem {
         line('Uptime', `${s.uptime}${s.connections ? ` · ${s.connections} connection${s.connections === 1 ? '' : 's'}` : ''}`);
         line('Command', s.command, 'wtp-mono');
         line('Folder', s.directory, 'wtp-mono');
-        line('CPU', `${s.cpu}${s.growth ? ` · ${s.growth}` : ''}`);
+        if (s.total_memory_label || s.memory_change_label || s.resources_label) {
+            line('Total memory', valueAfter(s.total_memory_label));
+            line('Current change', valueAfter(s.memory_change_label));
+            line('Resources', s.resources_label);
+        } else {
+            line('CPU', `${s.cpu}${s.growth ? ` · ${s.growth}` : ''}`);
+        }
         line('Clean up', s.cleanup, 'wtp-alert');
 
         if (s.processes.length > 1) {

@@ -1,4 +1,5 @@
 pub mod agents;
+pub mod alert;
 pub mod control;
 pub mod format;
 pub mod github;

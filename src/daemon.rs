@@ -11,8 +11,8 @@ use std::time::Duration;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{Notify, mpsc};
 use zbus::object_server::SignalEmitter;
+use wtp_core::alert::{self, AlertLevel};
 use wtp_core::control;
-use wtp_core::format;
 use wtp_core::github::{self, GitHubInfo};
 use wtp_core::model::{self, Server};
 use wtp_core::prefs::{CleanupMode, Prefs, TrayMode};
@@ -82,6 +82,8 @@ pub struct Core {
     memory: SystemMemory,
     retired: BTreeMap<u16, Retired>,
     snoozed: HashMap<String, f64>,
+    /// Totals last sent for a server. Repeats require a higher step after the snooze.
+    alerted: HashMap<String, AlertLevel>,
     handled_cleanups: HashSet<String>,
     github: HashMap<String, (GitHubInfo, f64)>,
     state: State,
@@ -98,6 +100,7 @@ impl Core {
             memory: SystemMemory { total: 0, available: 0 },
             retired: BTreeMap::new(),
             snoozed: HashMap::new(),
+            alerted: HashMap::new(),
             handled_cleanups: HashSet::new(),
             github: HashMap::new(),
             state: State::default(),
@@ -148,25 +151,32 @@ impl Core {
     fn evaluate_alerts(&mut self, now: f64, out: &mut ScanOutput) {
         let keys: HashSet<&str> = self.servers.iter().map(|s| s.key.as_str()).collect();
         self.snoozed.retain(|k, _| keys.contains(k.as_str()));
+        self.alerted.retain(|k, _| keys.contains(k.as_str()));
         if !self.prefs.leak_warnings {
             return;
         }
         let threshold = self.prefs.threshold_bytes();
+        let cooldown = self.prefs.snooze_minutes as f64 * 60.0;
         for s in self.servers.iter().filter(|s| s.needs_attention(threshold)) {
-            if self.snoozed.get(&s.key).is_some_and(|until| now < *until) {
+            let previous = self.alerted.get(&s.key).copied();
+            let until = self.snoozed.get(&s.key).copied();
+            if !alert::should_alert(previous, until, now, s.memory, s.memory_growth()) {
                 continue;
             }
-            self.snoozed.insert(s.key.clone(), now + self.prefs.snooze_minutes as f64 * 60.0);
-            let body = if s.is_leaking() {
-                format!("{} grew by {} in 10 minutes and is now using {}.", s.display_name(), format::bytes(s.memory_growth()), format::bytes(s.memory))
-            } else {
-                format!("{} is using {} (alert threshold {}).", s.display_name(), format::bytes(s.memory), format::total(threshold))
-            };
+            self.snoozed.insert(s.key.clone(), now + cooldown);
+            self.alerted.insert(s.key.clone(), AlertLevel { total: s.memory, growth: s.memory_growth() });
+            let text = alert::format_server_alert(s, self.memory.total);
             let mut actions = vec![("snooze", Command::Snooze(s.port))];
             if !s.is_protected {
                 actions.insert(0, ("stop", Command::Stop(s.port)));
             }
-            out.notices.push(Notice { summary: format!("Port {} needs attention", s.port), body, critical: true, actions });
+            out.notices.push(Notice {
+                summary: text.summary,
+                body: text.body,
+                critical: true,
+                actions,
+                replace_key: Some(s.key.clone()),
+            });
         }
     }
 
@@ -193,7 +203,13 @@ impl Core {
             CleanupMode::Automatic => {
                 out.auto_stop.extend(fresh.iter().map(|(s, _)| s.port));
                 if self.prefs.cleanup_notify {
-                    out.notices.push(Notice { summary: "Stopped idle servers".into(), body: names, critical: false, actions: vec![] });
+                    out.notices.push(Notice {
+                        summary: "Stopped idle servers".into(),
+                        body: names,
+                        critical: false,
+                        actions: vec![],
+                        replace_key: None,
+                    });
                 }
             }
             CleanupMode::Ask if self.prefs.cleanup_notify => out.notices.push(Notice {
@@ -201,6 +217,7 @@ impl Core {
                 body: names,
                 critical: false,
                 actions: vec![("cleanup", Command::CleanUp)],
+                replace_key: None,
             }),
             _ => {}
         }
@@ -593,11 +610,127 @@ async fn stop_job(job: StopJob, core: Arc<Mutex<Core>>, wake: Arc<Notify>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wtp_core::agents::AgentSession;
+    use wtp_core::model::Sample;
+    use wtp_core::project::ProjectInfo;
+
+    fn mb(n: u64) -> u64 {
+        n * 1024 * 1024
+    }
+
+    fn attention_server(memory: u64, baseline: u64) -> Server {
+        Server {
+            key: "5173-7-1000".into(),
+            port: 5173,
+            pid: 7,
+            root_pid: 7,
+            process_name: "node".into(),
+            addresses: vec![],
+            cwd: Some("/workspace/app".into()),
+            cwd_exists: true,
+            command: Some("vite --port 5173".into()),
+            launch: None,
+            launch_directory: None,
+            started_at: 1_000.0,
+            project: ProjectInfo { name: "studio-vite".into(), ..Default::default() },
+            agent: Some(AgentSession {
+                kind: "Claude Code",
+                id: "sess".into(),
+                title: Some("Fix OAuth callback".into()),
+                estimated: false,
+            }),
+            processes: vec![],
+            process_starts: HashMap::new(),
+            memory,
+            cpu: 35.0,
+            connections: 0,
+            history: vec![
+                Sample { time: 1_000.0, memory: baseline, cpu: 0.0 },
+                Sample { time: 1_300.0, memory, cpu: 35.0 },
+            ],
+            last_active: 1_300.0,
+            is_protected: false,
+        }
+    }
+
+    fn alerting_core(memory: u64, baseline: u64) -> Core {
+        let mut core = Core::new();
+        core.prefs.leak_warnings = true;
+        core.prefs.snooze_minutes = 60;
+        core.memory = SystemMemory { total: 16 * 1024 * 1024 * 1024, available: 8 * 1024 * 1024 * 1024 };
+        core.servers = vec![attention_server(memory, baseline)];
+        core
+    }
+
+    fn notices_at(core: &mut Core, now: f64) -> Vec<Notice> {
+        let mut out = ScanOutput::default();
+        core.evaluate_alerts(now, &mut out);
+        out.notices
+    }
 
     #[test]
     fn stopping_a_missing_port_is_an_error() {
         let core = Core::new();
         assert_eq!(core.check_stop(9, false).unwrap_err(), "no dev server on :9");
         assert_eq!(core.check_stop(9, true).unwrap_err(), "no dev server on :9");
+    }
+
+    #[test]
+    fn resource_alert_names_total_change_and_cpu_ram() {
+        let mut core = alerting_core(mb(640), mb(520));
+        core.prefs.threshold_gb = 0.5;
+        let notes = notices_at(&mut core, 1_400.0);
+        assert_eq!(notes.len(), 1);
+        let note = &notes[0];
+        assert_eq!(
+            note.summary,
+            "Port 5173 · studio-vite · vite --port 5173 · Claude Code: Fix OAuth callback"
+        );
+        assert_eq!(
+            note.body,
+            "Total memory: 640 MB\nCurrent change: +120 MB in the last 5 min\nCPU 35% · 3.9% of RAM"
+        );
+        assert_eq!(note.replace_key.as_deref(), Some("5173-7-1000"));
+        assert_eq!(note.actions.iter().map(|(k, _)| *k).collect::<Vec<_>>(), vec!["stop", "snooze"]);
+    }
+
+    #[test]
+    fn the_same_server_does_not_alert_again_as_the_number_climbs() {
+        let mut core = alerting_core(mb(640), mb(80));
+        assert_eq!(notices_at(&mut core, 1_400.0).len(), 1, "the leak crossing alerts once");
+
+        core.servers[0].memory = mb(700);
+        core.servers[0].history[1].memory = mb(700);
+        assert!(notices_at(&mut core, 1_402.0).is_empty(), "a small climb inside the snooze is quiet");
+
+        core.servers[0].memory = mb(640) + mb(2_000);
+        core.servers[0].history[1].memory = core.servers[0].memory;
+        assert!(
+            notices_at(&mut core, 1_500.0).is_empty(),
+            "even a large jump waits out snooze_minutes"
+        );
+
+        let escalated = notices_at(&mut core, 1_400.0 + 60.0 * 60.0 + 1.0);
+        assert_eq!(escalated.len(), 1, "after the snooze, the higher step alerts once");
+        assert!(escalated[0].body.contains("Total memory:"));
+        assert_eq!(escalated[0].replace_key.as_deref(), Some("5173-7-1000"));
+
+        core.servers[0].memory += mb(10);
+        core.servers[0].history[1].memory = core.servers[0].memory;
+        assert!(
+            notices_at(&mut core, 1_400.0 + 2.0 * 60.0 * 60.0 + 5.0).is_empty(),
+            "after the next snooze, a few extra megabytes do not alert again"
+        );
+    }
+
+    #[test]
+    fn disabled_warnings_and_mute_send_nothing() {
+        let mut core = alerting_core(mb(640), mb(80));
+        core.prefs.leak_warnings = false;
+        assert!(notices_at(&mut core, 1_400.0).is_empty());
+
+        core.prefs.leak_warnings = true;
+        core.snoozed.insert("5173-7-1000".into(), f64::INFINITY);
+        assert!(notices_at(&mut core, 1_400.0).is_empty());
     }
 }

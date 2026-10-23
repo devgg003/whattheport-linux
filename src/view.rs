@@ -66,6 +66,18 @@ pub struct ServerView {
     pub command: Option<String>,
     pub directory: Option<String>,
     pub growth: Option<String>,
+    /// "Total memory: 1.4 GB". Resident memory of the process tree, labeled.
+    pub total_memory_label: String,
+    /// "Current change: +120 MB in the last 5 min". The window is the real sample span.
+    pub memory_change_label: String,
+    /// "CPU 35% · 9.0% of RAM".
+    pub resources_label: String,
+    /// Signed change in resident bytes over the sample window. Zero when there is no second sample.
+    pub memory_delta_bytes: i64,
+    /// Seconds covered by `memory_change_label`. Zero when there is no second sample.
+    pub memory_window_seconds: u64,
+    /// This server's share of system RAM, formatted the same way as `cpu`.
+    pub ram_percent: String,
     pub cleanup: Option<String>,
     pub connections: u32,
     pub processes: Vec<ProcessView>,
@@ -201,7 +213,7 @@ pub fn build(i: Inputs) -> State {
 
 /// Prefix a session title when the link is only a folder guess. Idempotent.
 pub(crate) fn mark_estimated(text: &str, estimated: bool) -> String {
-    if estimated && !text.starts_with('~') { format!("~{text}") } else { text.to_string() }
+    wtp_core::alert::mark_estimated(text, estimated)
 }
 
 fn server_view(s: &Server, i: &Inputs, threshold: u64, color: String) -> ServerView {
@@ -220,6 +232,8 @@ fn server_view(s: &Server, i: &Inputs, threshold: u64, color: String) -> ServerV
         None => format!("up {uptime}"),
     };
     let growth = s.memory_growth();
+    let reading = wtp_core::alert::memory_reading(s, i.memory.total);
+    let alert_text = wtp_core::alert::format_alert(&wtp_core::alert::subject_from_server(s), &reading);
     let github = match (&s.project.root, &s.project.branch) {
         (Some(root), Some(branch)) => i.github.get(&format!("{root}|{branch}")).map(|g| g.0.clone()),
         _ => None,
@@ -252,7 +266,17 @@ fn server_view(s: &Server, i: &Inputs, threshold: u64, color: String) -> ServerV
         command: s.command.clone(),
         directory: s.cwd.clone(),
         growth: (growth >= 1024 * 1024).then(|| format!("+{} in 10 min", format::bytes(growth))),
-        cleanup: model::cleanup_reason(s, i.prefs, i.now).map(|r| r.label()),
+        total_memory_label: alert_text.total,
+        memory_change_label: alert_text.change_labeled,
+        resources_label: alert_text.resources,
+        memory_delta_bytes: reading.delta,
+        memory_window_seconds: if reading.has_window { wtp_core::alert::window_seconds(reading.window_secs) } else { 0 },
+        ram_percent: format::percent(reading.ram_percent),
+        // Leak suggestions used to say "+750 MB in 10m" even when the sample window was shorter.
+        // Use the same change phrase as the alert so the row and the notification agree.
+        cleanup: model::cleanup_reason(s, i.prefs, i.now).map(|r| {
+            if r.is_leak() { alert_text.change.clone() } else { r.label() }
+        }),
         connections: s.connections,
         processes: s
             .processes
@@ -298,7 +322,7 @@ mod tests {
 
     use super::*;
     use wtp_core::agents::AgentSession;
-    use wtp_core::model::Server;
+    use wtp_core::model::{Sample, Server};
     use wtp_core::prefs::Prefs;
     use wtp_core::procfs::SystemMemory;
     use wtp_core::project::ProjectInfo;
@@ -373,5 +397,92 @@ mod tests {
         assert_eq!(guessed.agent.as_deref(), Some("Codex: ~Migrate docs to Astro 5"));
         assert!(serde_json::to_string(&guessed).unwrap().contains("\"session_estimated\":true"));
         assert_eq!(mark_estimated(&guessed.subtitle, true), guessed.subtitle);
+    }
+
+    #[test]
+    fn view_adds_labeled_resource_fields_and_keeps_the_old_keys() {
+        let view = view_of(AgentSession {
+            kind: "Claude Code",
+            id: "sess".into(),
+            title: Some("Fix OAuth callback".into()),
+            estimated: false,
+        });
+        let json = serde_json::to_value(&view).unwrap();
+        assert_eq!(json["memory"], "50 MB");
+        assert_eq!(json["memory_bytes"], 50 * 1024 * 1024);
+        assert_eq!(json["cpu"], "0.5%");
+        assert!(json["growth"].is_null());
+        assert_eq!(json["total_memory_label"], "Total memory: 50 MB");
+        assert_eq!(json["memory_change_label"], "Current change: not enough history yet");
+        assert_eq!(json["resources_label"], "CPU 0.5% · 0.6% of RAM");
+        assert_eq!(json["ram_percent"], "0.6%");
+        assert_eq!(json["memory_delta_bytes"], 0);
+        assert_eq!(json["memory_window_seconds"], 0);
+        assert_eq!(json["name"], "docs-site");
+    }
+
+    #[test]
+    fn view_change_label_uses_the_real_window_and_keeps_legacy_growth() {
+        let prefs = Prefs::default();
+        let memory = SystemMemory { total: 8 << 30, available: 4 << 30 };
+        let baseline = 100 * 1024 * 1024;
+        let now_mem = 700 * 1024 * 1024;
+        let servers = vec![Server {
+            key: "3000-1-1".into(),
+            port: 3000,
+            pid: 1,
+            root_pid: 1,
+            process_name: "node".into(),
+            addresses: vec![],
+            cwd: Some("/workspace/app".into()),
+            cwd_exists: true,
+            command: Some("next dev".into()),
+            launch: None,
+            launch_directory: None,
+            started_at: 1_000_000.0,
+            project: ProjectInfo { name: "docs-site".into(), ..Default::default() },
+            agent: None,
+            processes: vec![],
+            process_starts: HashMap::new(),
+            memory: now_mem,
+            cpu: 35.0,
+            connections: 0,
+            history: vec![
+                Sample { time: 1_000.0, memory: baseline, cpu: 0.0 },
+                Sample { time: 1_045.0, memory: now_mem, cpu: 35.0 },
+            ],
+            last_active: 1_045.0,
+            is_protected: false,
+        }];
+        let colors = HashMap::new();
+        let snoozed = HashMap::new();
+        let github = HashMap::new();
+        let view = build(Inputs {
+            now: 1_045.0,
+            prefs: &prefs,
+            servers: &servers,
+            colors: &colors,
+            memory: &memory,
+            retired: vec![],
+            snoozed: &snoozed,
+            github: &github,
+            launch_at_login: false,
+        })
+        .servers
+        .into_iter()
+        .next()
+        .unwrap();
+        assert_eq!(view.growth.as_deref(), Some("+600 MB in 10 min"));
+        assert_eq!(view.memory_change_label, "Current change: +600 MB in the last 45 sec");
+        assert_eq!(view.total_memory_label, "Total memory: 700 MB");
+        assert_eq!(view.resources_label, "CPU 35% · 8.5% of RAM");
+        assert_eq!(view.memory_delta_bytes, 600 * 1024 * 1024);
+        assert_eq!(view.memory_window_seconds, 45);
+        assert_eq!(view.cleanup.as_deref(), Some("+600 MB in the last 45 sec"));
+        let json = serde_json::to_value(&view).unwrap();
+        assert_eq!(json["memory"], "700 MB");
+        assert_eq!(json["memory_bytes"], now_mem);
+        assert!(json.get("growth").is_some());
+        assert!(json.get("total_memory_label").is_some());
     }
 }

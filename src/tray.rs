@@ -77,11 +77,15 @@ fn server_menu(s: &ServerView) -> MenuItem<Tray> {
     if let Some(cmd) = &s.command {
         items.push(info(cmd));
     }
-    let mut stats = format!("CPU {}", s.cpu);
-    if let Some(g) = &s.growth {
-        stats.push_str(&format!(" · {g}"));
+    if !s.total_memory_label.is_empty() {
+        items.push(info(s.total_memory_label.clone()));
     }
-    items.push(info(stats));
+    if !s.memory_change_label.is_empty() {
+        items.push(info(s.memory_change_label.clone()));
+    }
+    if !s.resources_label.is_empty() {
+        items.push(info(s.resources_label.clone()));
+    }
     if let Some(why) = &s.cleanup {
         items.push(info(format!("Suggest clean up: {why}")));
     }
